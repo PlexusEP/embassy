@@ -493,6 +493,7 @@ impl Driver for RtcDriver {
     fn now(&self) -> u64 {
         let r = regs_gp16();
         // Spinlock is needed ensure period and counter are consistent
+        // TODO: Find a better solution eventually
         loop {
             let period1 = self.period.load(Ordering::Acquire);
             let counter = r.cnt().read().cnt();
