@@ -12,11 +12,11 @@ use stm32_metapac::timer::{regs, TimGp16};
 
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac::timer::vals;
+use crate::peripherals;
 use crate::rcc::{self, SealedRccPeripheral};
 #[cfg(feature = "low-power")]
 use crate::rtc::Rtc;
 use crate::timer::{CoreInstance, GeneralInstance1Channel};
-use crate::{interrupt, peripherals};
 
 // NOTE regarding ALARM_COUNT:
 //
@@ -53,121 +53,6 @@ type T = peripherals::TIM22;
 type T = peripherals::TIM23;
 #[cfg(time_driver_tim24)]
 type T = peripherals::TIM24;
-
-foreach_interrupt! {
-    (TIM1, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim1)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM2, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim2)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM3, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim3)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM4, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim4)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM5, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim5)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM8, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim8)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM9, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim9)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM12, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim12)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM15, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim15)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM20, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim20)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM21, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim21)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM22, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim22)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM23, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim23)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-    (TIM24, timer, $block:ident, CC, $irq:ident) => {
-        #[cfg(time_driver_tim24)]
-        #[cfg(feature = "rt")]
-        #[interrupt]
-        fn $irq() {
-            DRIVER.on_interrupt()
-        }
-    };
-}
 
 fn regs_gp16() -> TimGp16 {
     unsafe { TimGp16::from_ptr(T::regs()) }
@@ -260,12 +145,16 @@ impl RtcDriver {
         });
 
         <T as GeneralInstance1Channel>::CaptureCompareInterrupt::unpend();
-        unsafe { <T as GeneralInstance1Channel>::CaptureCompareInterrupt::enable() };
+        <T as CoreInstance>::UpdateInterrupt::unpend();
+        unsafe {
+            <T as GeneralInstance1Channel>::CaptureCompareInterrupt::enable();
+            <T as CoreInstance>::UpdateInterrupt::enable();
+        }
 
         r.cr1().modify(|w| w.set_cen(true));
     }
 
-    fn on_interrupt(&self) {
+    pub(crate) fn on_interrupt(&self) {
         let r = regs_gp16();
 
         critical_section::with(|cs| {
@@ -317,9 +206,17 @@ impl RtcDriver {
     }
 
     fn trigger_alarm(&self, cs: CriticalSection) {
-        let mut next = self.queue.borrow(cs).borrow_mut().next_expiration(self.now());
+        let mut next = self
+            .queue
+            .borrow(cs)
+            .borrow_mut()
+            .next_expiration(self.now());
         while !self.set_alarm(cs, next) {
-            next = self.queue.borrow(cs).borrow_mut().next_expiration(self.now());
+            next = self
+                .queue
+                .borrow(cs)
+                .borrow_mut()
+                .next_expiration(self.now());
         }
     }
 
@@ -332,7 +229,9 @@ impl RtcDriver {
     fn time_until_next_alarm(&self, cs: CriticalSection) -> embassy_time::Duration {
         let now = self.now() + 32;
 
-        embassy_time::Duration::from_ticks(self.alarm.borrow(cs).timestamp.get().saturating_sub(now))
+        embassy_time::Duration::from_ticks(
+            self.alarm.borrow(cs).timestamp.get().saturating_sub(now),
+        )
     }
 
     #[cfg(feature = "low-power")]
@@ -362,7 +261,11 @@ impl RtcDriver {
             (cnt, period)
         };
 
-        let period = if cnt > u16::MAX as u32 / 2 { period + 1 } else { period };
+        let period = if cnt > u16::MAX as u32 / 2 {
+            period + 1
+        } else {
+            period
+        };
 
         self.period.store(period, Ordering::SeqCst);
         regs_gp16().cnt().write(|w| w.set_cnt(cnt as u16));
@@ -399,7 +302,8 @@ impl RtcDriver {
 
     #[cfg(feature = "low-power")]
     /// The minimum pause time beyond which the executor will enter a low-power state.
-    pub(crate) const MIN_STOP_PAUSE: embassy_time::Duration = embassy_time::Duration::from_millis(250);
+    pub(crate) const MIN_STOP_PAUSE: embassy_time::Duration =
+        embassy_time::Duration::from_millis(250);
 
     #[cfg(feature = "low-power")]
     /// Pause the timer if ready; return err if not
@@ -492,16 +396,11 @@ impl RtcDriver {
 impl Driver for RtcDriver {
     fn now(&self) -> u64 {
         let r = regs_gp16();
-        // Spinlock is needed ensure period and counter are consistent
-        // TODO: Find a better solution eventually
-        loop {
-            let period1 = self.period.load(Ordering::Acquire);
-            let counter = r.cnt().read().cnt();
-            let period2 = self.period.load(Ordering::Acquire);
-            if period1 == period2 {
-                return calc_now(period1, counter);
-            }
-        }
+
+        let period = self.period.load(Ordering::Relaxed);
+        compiler_fence(Ordering::Acquire);
+        let counter = r.cnt().read().cnt();
+        calc_now(period, counter)
     }
 
     fn schedule_wake(&self, at: u64, waker: &core::task::Waker) {
@@ -518,7 +417,6 @@ impl Driver for RtcDriver {
     }
 }
 
-#[cfg(feature = "low-power")]
 pub(crate) fn get_driver() -> &'static RtcDriver {
     &DRIVER
 }
