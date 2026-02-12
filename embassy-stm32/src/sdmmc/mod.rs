@@ -8,6 +8,7 @@ use core::slice;
 use core::task::Poll;
 
 use aligned::{A4, Aligned};
+use cortex_m::asm::dsb;
 use embassy_hal_internal::{Peri, PeripheralType};
 use embassy_sync::waitqueue::AtomicWaker;
 use sdio_host::Cmd;
@@ -405,20 +406,29 @@ const DMA_TRANSFER_OPTIONS: crate::dma::TransferOptions = crate::dma::TransferOp
     complete_transfer_ir: true,
 };
 
+pub enum DirPolarity {
+    OutputOnLow,
+    OutputOnHigh,
+}
+
 /// SDMMC configuration
 ///
 /// Default values:
 /// data_transfer_timeout: 5_000_000
+/// dir_polarity: None
 #[non_exhaustive]
 pub struct Config {
     /// The timeout to be set for data transfers, in card bus clock periods
     pub data_transfer_timeout: u32,
+    // Sets the polarity of dir pins (cdir, d0dir, d13dir)
+    pub dir_polarity: Option<DirPolarity>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             data_transfer_timeout: 5_000_000,
+            dir_polarity: None,
         }
     }
 }
@@ -441,6 +451,9 @@ pub struct Sdmmc<'d> {
     d5: Option<Peri<'d, AnyPin>>,
     d6: Option<Peri<'d, AnyPin>>,
     d7: Option<Peri<'d, AnyPin>>,
+    cdir: Option<Peri<'d, AnyPin>>,
+    d0dir: Option<Peri<'d, AnyPin>>,
+    d123dir: Option<Peri<'d, AnyPin>>,
 
     config: Config,
 }
@@ -451,6 +464,7 @@ const CMD_AF: AfType = AfType::output(OutputType::PushPull, Speed::VeryHigh);
 #[cfg(gpio_v2)]
 const CMD_AF: AfType = AfType::output_pull(OutputType::PushPull, Speed::VeryHigh, Pull::Up);
 const DATA_AF: AfType = CMD_AF;
+const DIR_AF: AfType = AfType::output(OutputType::PushPull, Speed::VeryHigh);
 
 #[cfg(sdmmc_v1)]
 impl<'d> Sdmmc<'d> {
@@ -586,12 +600,20 @@ impl<'d> Sdmmc<'d> {
         clk: Peri<'d, impl CkPin<T>>,
         cmd: Peri<'d, impl CmdPin<T>>,
         d0: Peri<'d, impl D0Pin<T>>,
+        cdir: Option<Peri<'d, impl CDirPin<T>>>,
+        d0dir: Option<Peri<'d, impl D0DirPin<T>>>,
         config: Config,
     ) -> Self {
         critical_section::with(|_| {
             set_as_af!(clk, CLK_AF);
             set_as_af!(cmd, CMD_AF);
             set_as_af!(d0, DATA_AF);
+            if let Some(pin) = cdir.as_ref() {
+                pin.set_as_af(pin.af_num(), DIR_AF);
+            }
+            if let Some(pin) = d0dir.as_ref() {
+                pin.set_as_af(pin.af_num(), DIR_AF);
+            }
         });
 
         Self::new_inner(
@@ -605,6 +627,9 @@ impl<'d> Sdmmc<'d> {
             None,
             None,
             None,
+            None,
+            cdir.map(|pin| pin.into()),
+            d0dir.map(|pin| pin.into()),
             None,
             config,
         )
@@ -620,6 +645,9 @@ impl<'d> Sdmmc<'d> {
         d1: Peri<'d, impl D1Pin<T>>,
         d2: Peri<'d, impl D2Pin<T>>,
         d3: Peri<'d, impl D3Pin<T>>,
+        cdir: Option<Peri<'d, impl CDirPin<T>>>,
+        d0dir: Option<Peri<'d, impl D0DirPin<T>>>,
+        d123dir: Option<Peri<'d, impl D123DirPin<T>>>,
         config: Config,
     ) -> Self {
         critical_section::with(|_| {
@@ -629,6 +657,15 @@ impl<'d> Sdmmc<'d> {
             set_as_af!(d1, DATA_AF);
             set_as_af!(d2, DATA_AF);
             set_as_af!(d3, DATA_AF);
+            if let Some(pin) = cdir.as_ref() {
+                pin.set_as_af(pin.af_num(), DIR_AF);
+            }
+            if let Some(pin) = d0dir.as_ref() {
+                pin.set_as_af(pin.af_num(), DIR_AF);
+            }
+            if let Some(pin) = d123dir.as_ref() {
+                pin.set_as_af(pin.af_num(), DIR_AF);
+            }
         });
 
         Self::new_inner(
@@ -643,6 +680,9 @@ impl<'d> Sdmmc<'d> {
             None,
             None,
             None,
+            cdir.map(|pin| pin.into()),
+            d0dir.map(|pin| pin.into()),
+            d123dir.map(|pin| pin.into()),
             config,
         )
     }
@@ -691,6 +731,9 @@ impl<'d> Sdmmc<'d> {
             Some(d5.into()),
             Some(d6.into()),
             Some(d7.into()),
+            None,
+            None,
+            None,
             config,
         )
     }
@@ -725,6 +768,9 @@ impl<'d> Sdmmc<'d> {
         d5: Option<Peri<'d, AnyPin>>,
         d6: Option<Peri<'d, AnyPin>>,
         d7: Option<Peri<'d, AnyPin>>,
+        cdir: Option<Peri<'d, AnyPin>>,
+        d0dir: Option<Peri<'d, AnyPin>>,
+        d123dir: Option<Peri<'d, AnyPin>>,
         config: Config,
     ) -> Self {
         rcc::enable_and_reset_without_stop::<T>();
@@ -754,6 +800,14 @@ impl<'d> Sdmmc<'d> {
         // Power off, writen 00: Clock to the card is stopped;
         // D[7:0], CMD, and CK are driven high.
         info.regs.power().modify(|w| w.set_pwrctrl(PowerCtrl::Off as u8));
+        info.regs.power().modify(|w| {
+            if let Some(pol) = &config.dir_polarity {
+                match pol {
+                    DirPolarity::OutputOnLow => w.set_dirpol(false),
+                    DirPolarity::OutputOnHigh => w.set_dirpol(true),
+                };
+            }
+        });
 
         Self {
             info,
@@ -772,6 +826,9 @@ impl<'d> Sdmmc<'d> {
             d5,
             d6,
             d7,
+            cdir,
+            d0dir,
+            d123dir,
 
             config,
         }
@@ -837,6 +894,9 @@ impl<'d> Sdmmc<'d> {
 
         regs.dlenr().write(|w| w.set_datalength(size_of_val(buffer) as u32));
 
+        // Memory barrier before DMA setup to ensure any pending memory writes complete
+        dsb();
+
         // SAFETY: No other functions use the dma
         #[cfg(sdmmc_v1)]
         let transfer = unsafe {
@@ -869,6 +929,9 @@ impl<'d> Sdmmc<'d> {
             }
         });
 
+        // Memory barrier after DMA setup to ensure register writes complete before command
+        dsb();
+
         self.enable_interrupts();
 
         WrappedTransfer::new(transfer, &self)
@@ -890,6 +953,9 @@ impl<'d> Sdmmc<'d> {
         self.clear_interrupt_flags();
 
         regs.dlenr().write(|w| w.set_datalength(size_of_val(buffer) as u32));
+
+        // Memory barrier before DMA setup to ensure buffer data is visible to DMA
+        dsb();
 
         // SAFETY: No other functions use the dma
         #[cfg(sdmmc_v1)]
@@ -922,6 +988,9 @@ impl<'d> Sdmmc<'d> {
                 w.set_dten(true);
             }
         });
+
+        // Memory barrier after DMA setup to ensure register writes complete before command
+        dsb();
 
         self.enable_interrupts();
 
@@ -1179,6 +1248,9 @@ impl<'d> Sdmmc<'d> {
         })
         .await;
 
+        // Memory barrier after DMA completion to ensure CPU sees DMA-written data
+        dsb();
+
         self.clear_interrupt_flags();
         self.stop_datapath();
 
@@ -1269,6 +1341,9 @@ pin_trait!(D4Pin, Instance);
 pin_trait!(D5Pin, Instance);
 pin_trait!(D6Pin, Instance);
 pin_trait!(D7Pin, Instance);
+pin_trait!(CDirPin, Instance);
+pin_trait!(D0DirPin, Instance);
+pin_trait!(D123DirPin, Instance);
 
 #[cfg(sdmmc_v1)]
 dma_trait!(SdmmcDma, Instance);
