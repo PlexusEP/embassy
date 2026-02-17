@@ -1,7 +1,9 @@
 use core::default::Default;
-use core::ops::{Deref, DerefMut};
+use core::ops::{Deref, DerefMut, RangeInclusive};
 
+use sdio_host::common_cmd::R1;
 use sdio_host::emmc::{EMMC, ExtCSD};
+use sdio_host::emmc_cmd::AccessMode;
 use sdio_host::sd::{BusWidth, CIC, CID, CSD, CardCapacity, CardStatus, CurrentState, OCR, RCA, SCR, SD, SDStatus};
 use sdio_host::{common_cmd, emmc_cmd, sd_cmd};
 
@@ -10,6 +12,11 @@ use crate::sdmmc::{
     slice8_mut, slice8_ref,
 };
 use crate::time::{Hertz, mhz};
+
+// Used as the length of an Ext section in the General Information Memory Section. While the length is variable,
+// according to the specification, this is long enough to include Register Set Address 1. Since we only currently
+// support extension registers that have only one register set, this is long enough for all our needs.
+const EXT_REGISTER_LENGTH: usize = 48;
 
 /// Aligned data block for SDMMC transfers.
 ///
@@ -198,6 +205,12 @@ impl<'a, 'b> StorageDevice<'a, 'b, Card> {
             self.read_sd_status(cmd_block).await?;
         }
 
+        // TODO: Create a better abstraction for this
+        let cmd48_support = (self.info.scr.0 & (1 << 34)) != 0;
+        if cmd48_support {
+            self.read_ext_registers().await?;
+        }
+
         Ok(())
     }
 
@@ -299,6 +312,147 @@ impl<'a, 'b> StorageDevice<'a, 'b, Card> {
         }
 
         Ok(cmd_block.0.into())
+    }
+
+    /// Erase one (or more) SDMMC blocks
+    pub fn erase_blocks(&mut self, groups: RangeInclusive<u32>) -> Result<(), Error> {
+        self.sdmmc
+            .cmd(common_cmd::cmd::<R1>(32, *groups.start()), true, false)?;
+        self.sdmmc.cmd(common_cmd::cmd::<R1>(33, *groups.end()), true, false)?;
+        self.sdmmc.cmd(common_cmd::erase(), true, false)?;
+        self.poll_ready_for_data(None)
+    }
+
+    /// Build the argument for CMD48/49 (Read/Write Ext Register)
+    fn make_ext_reg_argument(fno: u8, page: u8, offset: u16, buffer: &DataBlock) -> u32 {
+        // Argument Structure:
+        // [31] = 0 (MIO Memory)
+        // [30:27] = FNO (Function Number)
+        // [26] = MW - mask write mode
+        // [25:18] = offset address
+        // [8:0] = length - 1 (0 is 1 byte)
+        //    FNO (Function Number), [26] = MW (Memory Write), [25:9] = Addr (Register Address)
+        let length: u32 = (size_of_val(buffer) - 1).try_into().unwrap();
+        u32::from(fno) << 27 | u32::from(page) << 18 | u32::from(offset) << 9 | length
+    }
+
+    async fn read_ext_reg(&mut self, fno: u8, page: u8, offset: u16, buffer: &mut DataBlock) -> Result<(), Error> {
+        let argument = Self::make_ext_reg_argument(fno, page, offset, buffer);
+        let mode = DatapathMode::Block(block_size(size_of_val(buffer)));
+        let transfer = self.sdmmc.prepare_datapath_read(aligned_mut(&mut buffer.0), mode);
+
+        self.sdmmc.cmd(common_cmd::cmd::<R1>(48, argument), true, true)?;
+        self.sdmmc.complete_datapath_transfer(transfer, true).await
+    }
+
+    // Read the General Information for Memory section (section "General Information", Physical Layer Simplified Specification, v9.10).
+    // This section contains pointers to additional extension registers with function-specific information. Function specific information
+    // is populated in `info` if it exists.
+    async fn read_ext_registers(&mut self) -> Result<(), Error> {
+        let mut data_block = DataBlock([0u32; 128]);
+        self.read_ext_reg(0, 0, 0, &mut data_block).await?;
+        // The first 16 bytes of the General Information is header.
+        let mut offset: usize = 16;
+        while offset < (size_of_val(&data_block.0) - EXT_REGISTER_LENGTH) {
+            let register = &(*data_block)[offset..offset + EXT_REGISTER_LENGTH];
+            let (next_offset, register) = self.parse_ext_reg(register).await?;
+            offset = next_offset;
+            if let ExtensionRegister::PowerManagement(power_ext) = register {
+                self.info.power_ext = Some(power_ext);
+            }
+        }
+        Ok(())
+    }
+
+    async fn parse_ext_reg(&mut self, register_set: &[u8]) -> Result<(usize, ExtensionRegister), Error> {
+        assert!(register_set.len() >= EXT_REGISTER_LENGTH);
+        let sfc = u16::from_be_bytes(register_set[0..2].try_into().unwrap());
+        let next_extension_address = u16::from_be_bytes(register_set[40..42].try_into().unwrap());
+        let number_of_registers: u8 = register_set[42];
+        if number_of_registers != 1 {
+            return Ok((next_extension_address as usize, ExtensionRegister::Unsupported));
+        }
+
+        let register_address = u32::from_be_bytes(register_set[44..].try_into().unwrap());
+        let offset: u16 = (register_address & 0x1FF).try_into().unwrap();
+        let page: u8 = (register_address >> 9 & 0xFF).try_into().unwrap();
+        let fno: u8 = (register_address >> 18 & 0xF).try_into().unwrap();
+
+        let register = if sfc & 0x1 != 0 {
+            let mut data_block = DataBlock([0u32; 128]);
+            self.read_ext_reg(fno, page, offset, &mut data_block).await?;
+            let supports_power_off_notification = data_block[1] & (1 << 4) != 0;
+            ExtensionRegister::PowerManagement(PowerExtensionRegister {
+                supports_power_off_notification,
+                fno,
+                page,
+                offset,
+            })
+        } else {
+            ExtensionRegister::Unsupported
+        };
+        Ok((next_extension_address as usize, register))
+    }
+
+    async fn write_ext_reg(&mut self, fno: u8, page: u8, offset: u16, buffer: &DataBlock) -> Result<(), Error> {
+        self.sdmmc
+            .cmd(common_cmd::set_block_length(size_of::<DataBlock>() as u32), true, false)?; // CMD16
+        let argument = Self::make_ext_reg_argument(fno, page, offset, buffer);
+
+        // sdmmc_v1 uses different cmd/dma order than v2, but only for writes
+        #[cfg(sdmmc_v1)]
+        self.sdmmc.cmd(common_cmd::cmd::<R1>(49, argument), true, false)?;
+
+        let transfer = self.sdmmc.prepare_datapath_write(
+            aligned_ref(&buffer.0),
+            DatapathMode::Block(block_size(size_of::<DataBlock>())),
+        );
+
+        #[cfg(sdmmc_v2)]
+        self.sdmmc.cmd(common_cmd::cmd::<R1>(49, argument), true, false)?;
+
+        self.sdmmc.complete_datapath_transfer(transfer, true).await?;
+
+        // TODO: Make this configurable
+        const TIMEOUT: u32 = 0x00FF_FFFF;
+        self.poll_ready_for_data(Some(TIMEOUT))
+    }
+
+    /// Send a power-off notification to the card. On SD cards supporting v4.00+, send this notification to
+    /// the card to indicate that shutdown of card power is imminent. Does not return until the card indicates
+    /// it is safe to remove power.
+    #[cfg(feature = "time")]
+    pub async fn power_off_notify(&mut self) -> Result<(), Error> {
+        use embassy_time::{Duration, Instant};
+        let Some(PowerExtensionRegister {
+            fno,
+            page,
+            offset,
+            supports_power_off_notification,
+        }) = self.info.power_ext
+        else {
+            return Err(Error::UnsupportedOperation);
+        };
+
+        if !supports_power_off_notification {
+            return Err(Error::UnsupportedOperation);
+        }
+
+        let mut buffer = DataBlock([0u32; 128]);
+        // Set the POFN bit in the Power Management Setting Register.
+        buffer[0] = 0x1;
+        self.write_ext_reg(fno, page, offset + 2, &buffer).await?;
+
+        // Wait for the POFR bit in the Power Management Status Register to be set to 1.
+        const TIMEOUT: Duration = Duration::from_secs(1);
+        let start = Instant::now();
+        while Instant::now().duration_since(start) < TIMEOUT {
+            self.read_ext_reg(fno, page, offset + 1, &mut buffer).await?;
+            if (buffer[0] & 0x1) != 0 {
+                return Ok(());
+            }
+        }
+        Err(Error::SoftwareTimeout)
     }
 }
 
@@ -403,6 +557,48 @@ impl<'a, 'b> StorageDevice<'a, 'b, Emmc> {
 
         Ok(data_block.0.into())
     }
+
+    /// Erase one (or more) eMMC groups
+    pub fn erase_groups(&mut self, groups: RangeInclusive<u32>) -> Result<(), Error> {
+        self.sdmmc
+            .cmd(emmc_cmd::erase_group_start(*groups.start()), true, false)?;
+        self.sdmmc.cmd(emmc_cmd::erase_group_end(*groups.end()), true, false)?;
+        self.sdmmc.cmd(common_cmd::erase(), true, false)?;
+        self.poll_ready_for_data(None)
+    }
+
+    /// Send a power off notification to the card and wait until the card indicates it is ready for shutdown.
+    #[cfg(feature = "time")]
+    pub async fn power_off_notify(&mut self) -> Result<(), Error> {
+        use embassy_time::{Duration, Instant};
+        const DEFAULT_POWER_OFF_TIMEOUT: Duration = Duration::from_millis(500);
+        let timeout = if self.info.ext_csd.csd_structure_version() >= 6 {
+            // Byte 248 in the CSD is the GENERIC_CMD6_TIMEOUT field, in units of 10ms.
+            let millis = ((self.info.ext_csd.inner[62] >> 24) & 0xFF) * 10;
+            Duration::from_millis(millis.into())
+        } else {
+            DEFAULT_POWER_OFF_TIMEOUT
+        };
+
+        const POWER_OFF_NOTIFICATION: u8 = 34;
+        const POWER_OFF_SHORT: u8 = 2;
+
+        // Always send POWER_OFF_SHORT
+        self.sdmmc.cmd(
+            emmc_cmd::modify_ext_csd(AccessMode::WriteByte, POWER_OFF_NOTIFICATION, POWER_OFF_SHORT),
+            true,
+            false,
+        )?;
+
+        let start = Instant::now();
+        while Instant::now().duration_since(start) < timeout {
+            let status: CardStatus<Emmc> = self.sdmmc.read_status(self.info.get_address())?.into();
+            if status.ready_for_data() {
+                return Ok(());
+            }
+        }
+        Err(Error::SoftwareTimeout)
+    }
 }
 
 /// Card or Emmc storage device
@@ -506,17 +702,8 @@ impl<'a, 'b, A: Addressable> StorageDevice<'a, 'b, A> {
         self.sdmmc.complete_datapath_transfer(transfer, true).await?;
 
         // TODO: Make this configurable
-        let mut timeout: u32 = 0x00FF_FFFF;
-
-        while timeout > 0 {
-            let status: CardStatus<A::Ext> = self.sdmmc.read_status(self.info.get_address())?.into();
-            if status.ready_for_data() {
-                return Ok(());
-            }
-            timeout -= 1;
-        }
-
-        Err(Error::SoftwareTimeout)
+        let timeout: u32 = 0x00FF_FFFF;
+        self.poll_ready_for_data(Some(timeout))
     }
 
     /// Write multiple data blocks.
@@ -560,14 +747,20 @@ impl<'a, 'b, A: Addressable> StorageDevice<'a, 'b, A> {
         self.sdmmc.clear_interrupt_flags();
 
         // TODO: Make this configurable
-        let mut timeout: u32 = 0x00FF_FFFF;
+        let timeout: u32 = 0x00FF_FFFF;
+        self.poll_ready_for_data(Some(timeout))
+    }
 
-        while timeout > 0 {
+    // TODO: This should be time-based, but the dependency on embassy-time is currently marked optional in Cargo.toml
+    fn poll_ready_for_data(&mut self, timeout: Option<u32>) -> Result<(), Error> {
+        let infinite = timeout.is_none();
+        let mut timeout = timeout.unwrap_or(0);
+        while timeout > 0 || infinite {
             let status: CardStatus<A::Ext> = self.sdmmc.read_status(self.info.get_address())?.into();
             if status.ready_for_data() {
                 return Ok(());
             }
-            timeout -= 1;
+            timeout = timeout.saturating_sub(1);
         }
         Err(Error::SoftwareTimeout)
     }
@@ -577,6 +770,27 @@ impl<'a, 'b, A: Addressable> Drop for StorageDevice<'a, 'b, A> {
     fn drop(&mut self) {
         self.sdmmc.on_drop();
     }
+}
+
+/// Data provided by the power management function extension register.
+#[derive(Clone, Copy, Debug)]
+pub struct PowerExtensionRegister {
+    // This card supports Power Off Notification
+    supports_power_off_notification: bool,
+    // Function Number
+    fno: u8,
+    // Page
+    page: u8,
+    // Offset
+    offset: u16,
+}
+
+/// Extension Registers
+pub enum ExtensionRegister {
+    /// The Power Management Function Extension Register.
+    PowerManagement(PowerExtensionRegister),
+    /// All other Extension Registers are unsupported at this time.
+    Unsupported,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -596,6 +810,8 @@ pub struct Card {
     pub scr: SCR,
     /// SD Status
     pub status: SDStatus,
+    /// Power Management Function data, if available.
+    pub power_ext: Option<PowerExtensionRegister>,
 }
 
 impl Addressable for Card {

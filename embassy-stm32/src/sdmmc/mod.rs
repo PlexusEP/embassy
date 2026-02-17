@@ -219,6 +219,8 @@ pub enum Error {
     UnsupportedCardType,
     /// Unsupported voltage.
     UnsupportedVoltage,
+    /// Unsupported card command or operation.
+    UnsupportedOperation,
     /// CRC error.
     Crc,
     /// No card inserted.
