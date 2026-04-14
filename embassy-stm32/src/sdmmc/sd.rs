@@ -458,6 +458,8 @@ impl<'a, 'b> StorageDevice<'a, 'b, Card> {
 
 /// Emmc storage device
 impl<'a, 'b> StorageDevice<'a, 'b, Emmc> {
+    const POWER_OFF_NOTIFICATION_EXT_CSD_INDEX: u8 = 34;
+
     /// Create a new EMMC card
     pub async fn new_emmc(sdmmc: &'a mut Sdmmc<'b>, cmd_block: &mut CmdBlock, freq: Hertz) -> Result<Self, Error> {
         let mut s = Self {
@@ -530,6 +532,20 @@ impl<'a, 'b> StorageDevice<'a, 'b, Emmc> {
             }
         }
 
+        // Enable the power off notification functionality. 
+        self.sdmmc.cmd(
+            emmc_cmd::modify_ext_csd(emmc_cmd::AccessMode::WriteByte, POWER_OFF_NOTIFICATION_EXT_CSD_INDEX, 1),
+            true,
+            false,
+        )?;
+
+        loop {
+            let status: CardStatus<EMMC> = self.sdmmc.read_status(self.info.rca)?.into();
+            if status.ready_for_data() {
+                break;
+            }
+        }
+
         self.sdmmc.clkcr_set_clkdiv(freq.clamp(mhz(0), mhz(25)), bus_width)?;
         self.info.ext_csd = self.read_ext_csd().await?;
 
@@ -580,12 +596,11 @@ impl<'a, 'b> StorageDevice<'a, 'b, Emmc> {
             DEFAULT_POWER_OFF_TIMEOUT
         };
 
-        const POWER_OFF_NOTIFICATION: u8 = 34;
         const POWER_OFF_SHORT: u8 = 2;
 
         // Always send POWER_OFF_SHORT
         self.sdmmc.cmd(
-            emmc_cmd::modify_ext_csd(AccessMode::WriteByte, POWER_OFF_NOTIFICATION, POWER_OFF_SHORT),
+            emmc_cmd::modify_ext_csd(AccessMode::WriteByte, POWER_OFF_NOTIFICATION_EXT_CSD_INDEX, POWER_OFF_SHORT),
             true,
             false,
         )?;
