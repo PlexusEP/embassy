@@ -639,7 +639,9 @@ impl<'a, 'b> StorageDevice<'a, 'b, Emmc> {
         let start = Instant::now();
         while Instant::now().duration_since(start) < timeout {
             let status: CardStatus<Emmc> = self.sdmmc.read_status(self.info.get_address())?.into();
-            if status.ready_for_data() {
+            let ext_csd = self.read_ext_csd().await?;
+            let power_off_status = (ext_csd.inner[61] >> 24) & 0xFF;
+            if status.ready_for_data() && power_off_status == POWER_OFF_LONG {
                 return Ok(());
             }
         }
