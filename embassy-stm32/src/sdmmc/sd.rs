@@ -534,7 +534,7 @@ impl<'a, 'b> StorageDevice<'a, 'b, Emmc> {
 
         // Enable the power off notification functionality. 
         self.sdmmc.cmd(
-            emmc_cmd::modify_ext_csd(emmc_cmd::AccessMode::WriteByte, POWER_OFF_NOTIFICATION_EXT_CSD_INDEX, 1),
+            emmc_cmd::modify_ext_csd(emmc_cmd::AccessMode::WriteByte, Self::POWER_OFF_NOTIFICATION_EXT_CSD_INDEX, 1),
             true,
             false,
         )?;
@@ -600,7 +600,7 @@ impl<'a, 'b> StorageDevice<'a, 'b, Emmc> {
 
         // Always send POWER_OFF_SHORT
         self.sdmmc.cmd(
-            emmc_cmd::modify_ext_csd(AccessMode::WriteByte, POWER_OFF_NOTIFICATION_EXT_CSD_INDEX, POWER_OFF_SHORT),
+            emmc_cmd::modify_ext_csd(AccessMode::WriteByte, Self::POWER_OFF_NOTIFICATION_EXT_CSD_INDEX, POWER_OFF_SHORT),
             true,
             false,
         )?;
