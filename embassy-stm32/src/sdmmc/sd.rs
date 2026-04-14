@@ -639,7 +639,6 @@ impl<'a, 'b> StorageDevice<'a, 'b, Emmc> {
         let start = Instant::now();
         while Instant::now().duration_since(start) < timeout {
             let status: CardStatus<Emmc> = self.sdmmc.read_status(self.info.get_address())?.into();
-            let ext_csd = self.read_ext_csd().await?;
             if status.ready_for_data() {
                 return Ok(());
             }
