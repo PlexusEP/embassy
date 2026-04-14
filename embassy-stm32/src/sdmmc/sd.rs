@@ -583,9 +583,9 @@ impl<'a, 'b> StorageDevice<'a, 'b, Emmc> {
         self.poll_ready_for_data(None)
     }
 
-    /// Send a power off notification to the card and wait until the card indicates it is ready for shutdown.
+    /// Send a short power off notification to the card and wait until the card indicates it is ready for shutdown.
     #[cfg(feature = "time")]
-    pub async fn power_off_notify(&mut self) -> Result<(), Error> {
+    pub async fn short_power_off_notify(&mut self) -> Result<(), Error> {
         use embassy_time::{Duration, Instant};
         const DEFAULT_POWER_OFF_TIMEOUT: Duration = Duration::from_millis(500);
         let timeout = if self.info.ext_csd.csd_structure_version() >= 6 {
@@ -601,6 +601,37 @@ impl<'a, 'b> StorageDevice<'a, 'b, Emmc> {
         // Always send POWER_OFF_SHORT
         self.sdmmc.cmd(
             emmc_cmd::modify_ext_csd(AccessMode::WriteByte, Self::POWER_OFF_NOTIFICATION_EXT_CSD_INDEX, POWER_OFF_SHORT),
+            true,
+            false,
+        )?;
+
+        let start = Instant::now();
+        while Instant::now().duration_since(start) < timeout {
+            let status: CardStatus<Emmc> = self.sdmmc.read_status(self.info.get_address())?.into();
+            if status.ready_for_data() {
+                return Ok(());
+            }
+        }
+        Err(Error::SoftwareTimeout)
+    }
+
+    /// Send a long power off notification to the card and wait until the card indicates it is ready for shutdown.
+    #[cfg(feature = "time")]
+    pub async fn long_power_off_notify(&mut self) -> Result<(), Error> {
+        use embassy_time::{Duration, Instant};
+        const DEFAULT_POWER_OFF_TIMEOUT: Duration = Duration::from_millis(500);
+        let timeout = if self.info.ext_csd.csd_structure_version() >= 6 {
+            // Byte 247 in the CSD is the POWER_OFF_LONG_TIME field, in units of 10ms.
+            let millis = ((self.info.ext_csd.inner[61] >> 24) & 0xFF) * 10;
+            Duration::from_millis(millis.into())
+        } else {
+            DEFAULT_POWER_OFF_TIMEOUT
+        };
+
+        const POWER_OFF_LONG: u8 = 3;
+
+        self.sdmmc.cmd(
+            emmc_cmd::modify_ext_csd(AccessMode::WriteByte, Self::POWER_OFF_NOTIFICATION_EXT_CSD_INDEX, POWER_OFF_LONG),
             true,
             false,
         )?;
