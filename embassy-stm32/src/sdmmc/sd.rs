@@ -585,7 +585,7 @@ impl<'a, 'b> StorageDevice<'a, 'b, Emmc> {
 
     /// Send a long power off notification to the card and wait until the card indicates it is ready for shutdown.
     #[cfg(feature = "time")]
-    pub async fn power_off_notify(&mut self) -> Result<(), Error> {
+    pub fn power_off_notify(&mut self) -> Result<(), Error> {
         use embassy_time::{Duration, Instant};
         const DEFAULT_POWER_OFF_TIMEOUT: Duration = Duration::from_millis(500);
         let timeout = if self.info.ext_csd.csd_structure_version() >= 6 {
