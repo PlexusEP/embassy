@@ -25,6 +25,13 @@ impl super::Rtc {
                 w.set_prediv_s(sync_psc);
                 w.set_prediv_a(async_psc);
             });
+
+            rtc.tampcr().modify(|w| {
+                w.set_tamppudis(stm32_metapac::rtc::vals::Tamppudis::Disabled);
+                w.set_tampfreq(stm32_metapac::rtc::vals::Tampfreq::Div1024);
+                w.set_tamptrg(0, stm32_metapac::rtc::vals::Tamptrg::RisingEdge);
+                w.set_tampe(0, true);
+            });
         });
     }
 
