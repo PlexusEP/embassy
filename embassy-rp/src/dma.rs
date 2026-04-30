@@ -29,9 +29,10 @@ impl<T: ChannelInstance> interrupt::typelevel::Handler<T::Interrupt> for Interru
 
         let ints0 = pac::DMA.ints(0).read();
         if ints0 & (1 << channel) != 0 {
+            pac::DMA.ints(0).write_value(1 << channel);
+
             CHANNEL_WAKERS[channel].wake();
         }
-        pac::DMA.ints(0).write_value(1 << channel);
     }
 }
 
@@ -64,13 +65,25 @@ impl<'d> Channel<'d> {
     }
 
     /// Get the channel number.
-    pub(crate) fn number(&self) -> u8 {
+    fn number(&self) -> u8 {
         self.number
     }
 
     /// Get the channel register block.
-    pub(crate) fn regs(&self) -> pac::dma::Channel {
+    #[cfg(feature = "unstable-pac")]
+    pub fn regs(&self) -> pac::dma::Channel {
         pac::DMA.ch(self.number as _)
+    }
+
+    /// Get the channel register block.
+    #[cfg(not(feature = "unstable-pac"))]
+    fn regs(&self) -> pac::dma::Channel {
+        pac::DMA.ch(self.number as _)
+    }
+
+    /// Get next write address.
+    pub fn write_addr(&self) -> u32 {
+        self.regs().write_addr().read()
     }
 
     /// Reborrow the channel, allowing it to be used in multiple places.
@@ -90,6 +103,7 @@ impl<'d> Channel<'d> {
         incr_read: bool,
         incr_write: bool,
         dreq: vals::TreqSel,
+        bswap: bool,
     ) {
         let p = self.regs();
 
@@ -113,6 +127,7 @@ impl<'d> Channel<'d> {
             w.set_incr_read(incr_read);
             w.set_incr_write(incr_write);
             w.set_chain_to(self.number());
+            w.set_bswap(bswap);
             w.set_en(true);
         });
 
@@ -122,7 +137,13 @@ impl<'d> Channel<'d> {
     /// DMA read from a peripheral to memory.
     ///
     /// SAFETY: Slice must point to a valid location reachable by DMA.
-    pub unsafe fn read<'a, W: Word>(&'a mut self, from: *const W, to: *mut [W], dreq: vals::TreqSel) -> Transfer<'a> {
+    pub unsafe fn read<'a, W: Word>(
+        &'a mut self,
+        from: *const W,
+        to: *mut [W],
+        dreq: vals::TreqSel,
+        bswap: bool,
+    ) -> Transfer<'a> {
         self.configure(
             from as *const u32,
             to as *mut W as *mut u32,
@@ -131,6 +152,32 @@ impl<'d> Channel<'d> {
             false,
             true,
             dreq,
+            bswap,
+        );
+        Transfer::new(self.reborrow())
+    }
+
+    /// Repetedly read from a peripheral to discard data.
+    ///
+    /// SAFETY: `from` must point to a valid location reachable by DMA.
+    pub unsafe fn read_discard<'a, W: Word>(
+        &'a mut self,
+        from: *mut W,
+        len: usize,
+        dreq: vals::TreqSel,
+    ) -> Transfer<'a> {
+        // static mut so that this is allocated in RAM.
+        static mut DUMMY: u32 = 0;
+
+        self.configure(
+            from as *mut u32,
+            core::ptr::addr_of_mut!(DUMMY) as *mut u32,
+            len,
+            W::size(),
+            false,
+            false,
+            dreq,
+            false,
         );
         Transfer::new(self.reborrow())
     }
@@ -138,7 +185,13 @@ impl<'d> Channel<'d> {
     /// DMA write from memory to a peripheral.
     ///
     /// SAFETY: Slice must point to a valid location reachable by DMA.
-    pub unsafe fn write<'a, W: Word>(&'a mut self, from: *const [W], to: *mut W, dreq: vals::TreqSel) -> Transfer<'a> {
+    pub unsafe fn write<'a, W: Word>(
+        &'a mut self,
+        from: *const [W],
+        to: *mut W,
+        dreq: vals::TreqSel,
+        bswap: bool,
+    ) -> Transfer<'a> {
         self.configure(
             from as *const W as *const u32,
             to as *mut u32,
@@ -147,14 +200,15 @@ impl<'d> Channel<'d> {
             true,
             false,
             dreq,
+            bswap,
         );
         Transfer::new(self.reborrow())
     }
 
-    /// DMA repeated write of the same value from memory to a peripheral.
+    /// Repetedly write 0 to peripeheral.
     ///
     /// SAFETY: `to` must point to a valid location reachable by DMA.
-    pub unsafe fn write_repeated<'a, W: Word>(
+    pub unsafe fn write_zeros<'a, W: Word>(
         &'a mut self,
         count: usize,
         to: *mut W,
@@ -171,6 +225,7 @@ impl<'d> Channel<'d> {
             false,
             false,
             dreq,
+            false,
         );
         Transfer::new(self.reborrow())
     }
@@ -189,7 +244,8 @@ impl<'d> Channel<'d> {
             W::size(),
             true,
             true,
-            vals::TreqSel::PERMANENT,
+            vals::TreqSel::Permanent,
+            false,
         );
         Transfer::new(self.reborrow())
     }
@@ -202,7 +258,7 @@ pub struct Transfer<'a> {
 }
 
 impl<'a> Transfer<'a> {
-    pub(crate) fn new(channel: Channel<'a>) -> Self {
+    fn new(channel: Channel<'a>) -> Self {
         Self { channel }
     }
 }
@@ -267,21 +323,21 @@ pub trait Word: SealedWord {
 impl SealedWord for u8 {}
 impl Word for u8 {
     fn size() -> vals::DataSize {
-        vals::DataSize::SIZE_BYTE
+        vals::DataSize::SizeByte
     }
 }
 
 impl SealedWord for u16 {}
 impl Word for u16 {
     fn size() -> vals::DataSize {
-        vals::DataSize::SIZE_HALFWORD
+        vals::DataSize::SizeHalfword
     }
 }
 
 impl SealedWord for u32 {}
 impl Word for u32 {
     fn size() -> vals::DataSize {
-        vals::DataSize::SIZE_WORD
+        vals::DataSize::SizeWord
     }
 }
 

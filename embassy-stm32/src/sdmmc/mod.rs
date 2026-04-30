@@ -5,22 +5,21 @@ use core::default::Default;
 use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::slice;
+use core::sync::atomic::{Ordering, fence};
 use core::task::Poll;
 
 use aligned::{A4, Aligned};
-use cortex_m::asm::dsb;
 use embassy_hal_internal::{Peri, PeripheralType};
 use embassy_sync::waitqueue::AtomicWaker;
 use sdio_host::Cmd;
-use sdio_host::common_cmd::{self, R1, R2, R3, Resp, ResponseLen, Rz};
-use sdio_host::sd::{BusWidth, CID, CSD, CardStatus, OCR, RCA};
-use sdio_host::sd_cmd::{R6, R7};
+use sdio_host::common_cmd::{self, R1, R2, Resp, ResponseLen, Rz};
+use sdio_host::sd::{BusWidth, CID, CSD, CardStatus};
 
 #[cfg(sdmmc_v1)]
 use crate::dma::ChannelAndRequest;
 #[cfg(gpio_v2)]
 use crate::gpio::Pull;
-use crate::gpio::{AfType, AnyPin, OutputType, SealedPin, Speed};
+use crate::gpio::{AfType, Flex, OutputType, Speed};
 use crate::interrupt::typelevel::Interrupt;
 use crate::pac::sdmmc::Sdmmc as RegBlock;
 use crate::rcc::{self, RccInfo, RccPeripheral, SealedRccPeripheral};
@@ -47,7 +46,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
             T::state().tx_waker.wake();
         }
 
-        #[cfg(sdmmc_v2)]
+        #[cfg(any(sdmmc_v2, sdmmc_v3))]
         if status.dcrcfail() || status.dtimeout() || status.dataend() || status.dbckend() || status.dabort() {
             T::state().tx_waker.wake();
         }
@@ -76,7 +75,7 @@ impl<T: Instance> interrupt::typelevel::Handler<T::Interrupt> for InterruptHandl
             if status.stbiterr() {
                 w.set_stbiterre(false);
             }
-            #[cfg(sdmmc_v2)]
+            #[cfg(any(sdmmc_v2, sdmmc_v3))]
             if status.dabort() {
                 w.set_dabortie(false);
             }
@@ -141,30 +140,6 @@ impl<E> From<CommandResponse<R2>> for CSD<E> {
     fn from(value: CommandResponse<R2>) -> Self {
         CSD::<E>::from(value.0)
     }
-}
-
-impl TypedResp for R3 {
-    type Word = u32;
-}
-
-impl<E> From<CommandResponse<R3>> for OCR<E> {
-    fn from(value: CommandResponse<R3>) -> Self {
-        OCR::<E>::from(value.0)
-    }
-}
-
-impl TypedResp for R6 {
-    type Word = u32;
-}
-
-impl<E> From<CommandResponse<R6>> for RCA<E> {
-    fn from(value: CommandResponse<R6>) -> Self {
-        RCA::<E>::from(value.0)
-    }
-}
-
-impl TypedResp for R7 {
-    type Word = u32;
 }
 
 /// Frequency used for SD Card initialization. Must be no higher than 400 kHz.
@@ -354,7 +329,7 @@ const fn block_size(bytes: usize) -> BlockSize {
 ///
 /// Returns `(bypass, clk_div, clk_f)`, where `bypass` enables clock divisor bypass (only sdmmc_v1),
 /// `clk_div` is the divisor register value and `clk_f` is the resulting new clock frequency.
-#[cfg(sdmmc_v2)]
+#[cfg(any(sdmmc_v2, sdmmc_v3))]
 fn clk_div(ker_ck: Hertz, sdmmc_ck: Hertz) -> Result<(bool, u16, Hertz), Error> {
     match ker_ck.0.div_ceil(sdmmc_ck.0) {
         0 | 1 => Ok((false, 0, ker_ck)),
@@ -371,7 +346,7 @@ fn clk_div(ker_ck: Hertz, sdmmc_ck: Hertz) -> Result<(bool, u16, Hertz), Error> 
 
 #[cfg(sdmmc_v1)]
 type Transfer<'a> = crate::dma::Transfer<'a>;
-#[cfg(sdmmc_v2)]
+#[cfg(any(sdmmc_v2, sdmmc_v3))]
 struct Transfer<'a> {
     _dummy: PhantomData<&'a ()>,
 }
@@ -449,16 +424,16 @@ pub struct Sdmmc<'d> {
     #[cfg(sdmmc_v1)]
     dma: ChannelAndRequest<'d>,
 
-    clk: Peri<'d, AnyPin>,
-    cmd: Peri<'d, AnyPin>,
-    d0: Peri<'d, AnyPin>,
-    d1: Option<Peri<'d, AnyPin>>,
-    d2: Option<Peri<'d, AnyPin>>,
-    d3: Option<Peri<'d, AnyPin>>,
-    d4: Option<Peri<'d, AnyPin>>,
-    d5: Option<Peri<'d, AnyPin>>,
-    d6: Option<Peri<'d, AnyPin>>,
-    d7: Option<Peri<'d, AnyPin>>,
+    _clk: Flex<'d>,
+    _cmd: Flex<'d>,
+    _d0: Flex<'d>,
+    _d1: Option<Flex<'d>>,
+    _d2: Option<Flex<'d>>,
+    d3: Option<Flex<'d>>,
+    _d4: Option<Flex<'d>>,
+    _d5: Option<Flex<'d>>,
+    _d6: Option<Flex<'d>>,
+    d7: Option<Flex<'d>>,
 
     config: Config,
 }
@@ -484,18 +459,12 @@ impl<'d> Sdmmc<'d> {
         d0: Peri<'d, impl D0Pin<T>>,
         config: Config,
     ) -> Self {
-        critical_section::with(|_| {
-            set_as_af!(clk, CLK_AF);
-            set_as_af!(cmd, CMD_AF);
-            set_as_af!(d0, DATA_AF);
-        });
-
         Self::new_inner(
             sdmmc,
             new_dma_nonopt!(dma, _irq),
-            clk.into(),
-            cmd.into(),
-            d0.into(),
+            new_pin!(clk, CLK_AF).unwrap(),
+            new_pin!(cmd, CMD_AF).unwrap(),
+            new_pin!(d0, DATA_AF).unwrap(),
             None,
             None,
             None,
@@ -522,24 +491,15 @@ impl<'d> Sdmmc<'d> {
         d3: Peri<'d, impl D3Pin<T>>,
         config: Config,
     ) -> Self {
-        critical_section::with(|_| {
-            set_as_af!(clk, CLK_AF);
-            set_as_af!(cmd, CMD_AF);
-            set_as_af!(d0, DATA_AF);
-            set_as_af!(d1, DATA_AF);
-            set_as_af!(d2, DATA_AF);
-            set_as_af!(d3, DATA_AF);
-        });
-
         Self::new_inner(
             sdmmc,
             new_dma_nonopt!(dma, _irq),
-            clk.into(),
-            cmd.into(),
-            d0.into(),
-            Some(d1.into()),
-            Some(d2.into()),
-            Some(d3.into()),
+            new_pin!(clk, CLK_AF).unwrap(),
+            new_pin!(cmd, CMD_AF).unwrap(),
+            new_pin!(d0, DATA_AF).unwrap(),
+            new_pin!(d1, DATA_AF),
+            new_pin!(d2, DATA_AF),
+            new_pin!(d3, DATA_AF),
             None,
             None,
             None,
@@ -570,38 +530,25 @@ impl<'d> Sdmmc<'d> {
         d7: Peri<'d, impl D7Pin<T>>,
         config: Config,
     ) -> Self {
-        critical_section::with(|_| {
-            set_as_af!(clk, CLK_AF);
-            set_as_af!(cmd, CMD_AF);
-            set_as_af!(d0, DATA_AF);
-            set_as_af!(d1, DATA_AF);
-            set_as_af!(d2, DATA_AF);
-            set_as_af!(d3, DATA_AF);
-            set_as_af!(d4, DATA_AF);
-            set_as_af!(d5, DATA_AF);
-            set_as_af!(d6, DATA_AF);
-            set_as_af!(d7, DATA_AF);
-        });
-
         Self::new_inner(
             sdmmc,
             new_dma_nonopt!(dma, _irq),
-            clk.into(),
-            cmd.into(),
-            d0.into(),
-            Some(d1.into()),
-            Some(d2.into()),
-            Some(d3.into()),
-            Some(d4.into()),
-            Some(d5.into()),
-            Some(d6.into()),
-            Some(d7.into()),
+            new_pin!(clk, CLK_AF).unwrap(),
+            new_pin!(cmd, CMD_AF).unwrap(),
+            new_pin!(d0, DATA_AF).unwrap(),
+            new_pin!(d1, DATA_AF),
+            new_pin!(d2, DATA_AF),
+            new_pin!(d3, DATA_AF),
+            new_pin!(d4, DATA_AF),
+            new_pin!(d5, DATA_AF),
+            new_pin!(d6, DATA_AF),
+            new_pin!(d7, DATA_AF),
             config,
         )
     }
 }
 
-#[cfg(sdmmc_v2)]
+#[cfg(any(sdmmc_v2, sdmmc_v3))]
 impl<'d> Sdmmc<'d> {
     /// Create a new SDMMC driver, with 1 data lane.
     pub fn new_1bit<T: Instance>(
@@ -612,17 +559,11 @@ impl<'d> Sdmmc<'d> {
         d0: Peri<'d, impl D0Pin<T>>,
         config: Config,
     ) -> Self {
-        critical_section::with(|_| {
-            set_as_af!(clk, CLK_AF);
-            set_as_af!(cmd, CMD_AF);
-            set_as_af!(d0, DATA_AF);
-        });
-
         Self::new_inner(
             sdmmc,
-            clk.into(),
-            cmd.into(),
-            d0.into(),
+            new_pin!(clk, CLK_AF).unwrap(),
+            new_pin!(cmd, CMD_AF).unwrap(),
+            new_pin!(d0, DATA_AF).unwrap(),
             None,
             None,
             None,
@@ -646,23 +587,14 @@ impl<'d> Sdmmc<'d> {
         d3: Peri<'d, impl D3Pin<T>>,
         config: Config,
     ) -> Self {
-        critical_section::with(|_| {
-            set_as_af!(clk, CLK_AF);
-            set_as_af!(cmd, CMD_AF);
-            set_as_af!(d0, DATA_AF);
-            set_as_af!(d1, DATA_AF);
-            set_as_af!(d2, DATA_AF);
-            set_as_af!(d3, DATA_AF);
-        });
-
         Self::new_inner(
             sdmmc,
-            clk.into(),
-            cmd.into(),
-            d0.into(),
-            Some(d1.into()),
-            Some(d2.into()),
-            Some(d3.into()),
+            new_pin!(clk, CLK_AF).unwrap(),
+            new_pin!(cmd, CMD_AF).unwrap(),
+            new_pin!(d0, DATA_AF).unwrap(),
+            new_pin!(d1, DATA_AF),
+            new_pin!(d2, DATA_AF),
+            new_pin!(d3, DATA_AF),
             None,
             None,
             None,
@@ -672,7 +604,7 @@ impl<'d> Sdmmc<'d> {
     }
 }
 
-#[cfg(sdmmc_v2)]
+#[cfg(any(sdmmc_v2, sdmmc_v3))]
 impl<'d> Sdmmc<'d> {
     /// Create a new SDMMC driver, with 8 data lanes.
     pub fn new_8bit<T: Instance>(
@@ -690,31 +622,18 @@ impl<'d> Sdmmc<'d> {
         d7: Peri<'d, impl D7Pin<T>>,
         config: Config,
     ) -> Self {
-        critical_section::with(|_| {
-            set_as_af!(clk, CLK_AF);
-            set_as_af!(cmd, CMD_AF);
-            set_as_af!(d0, DATA_AF);
-            set_as_af!(d1, DATA_AF);
-            set_as_af!(d2, DATA_AF);
-            set_as_af!(d3, DATA_AF);
-            set_as_af!(d4, DATA_AF);
-            set_as_af!(d5, DATA_AF);
-            set_as_af!(d6, DATA_AF);
-            set_as_af!(d7, DATA_AF);
-        });
-
         Self::new_inner(
             sdmmc,
-            clk.into(),
-            cmd.into(),
-            d0.into(),
-            Some(d1.into()),
-            Some(d2.into()),
-            Some(d3.into()),
-            Some(d4.into()),
-            Some(d5.into()),
-            Some(d6.into()),
-            Some(d7.into()),
+            new_pin!(clk, CLK_AF).unwrap(),
+            new_pin!(cmd, CMD_AF).unwrap(),
+            new_pin!(d0, DATA_AF).unwrap(),
+            new_pin!(d1, DATA_AF),
+            new_pin!(d2, DATA_AF),
+            new_pin!(d3, DATA_AF),
+            new_pin!(d4, DATA_AF),
+            new_pin!(d5, DATA_AF),
+            new_pin!(d6, DATA_AF),
+            new_pin!(d7, DATA_AF),
             config,
         )
     }
@@ -732,7 +651,7 @@ impl<'d> Sdmmc<'d> {
 
                 #[cfg(sdmmc_v1)]
                 w.set_stbiterre(true);
-                #[cfg(sdmmc_v2)]
+                #[cfg(any(sdmmc_v2, sdmmc_v3))]
                 w.set_dabortie(true);
             });
         });
@@ -741,19 +660,19 @@ impl<'d> Sdmmc<'d> {
     fn new_inner<T: Instance>(
         _sdmmc: Peri<'d, T>,
         #[cfg(sdmmc_v1)] dma: ChannelAndRequest<'d>,
-        clk: Peri<'d, AnyPin>,
-        cmd: Peri<'d, AnyPin>,
-        d0: Peri<'d, AnyPin>,
-        d1: Option<Peri<'d, AnyPin>>,
-        d2: Option<Peri<'d, AnyPin>>,
-        d3: Option<Peri<'d, AnyPin>>,
-        d4: Option<Peri<'d, AnyPin>>,
-        d5: Option<Peri<'d, AnyPin>>,
-        d6: Option<Peri<'d, AnyPin>>,
-        d7: Option<Peri<'d, AnyPin>>,
+        clk: Flex<'d>,
+        cmd: Flex<'d>,
+        d0: Flex<'d>,
+        d1: Option<Flex<'d>>,
+        d2: Option<Flex<'d>>,
+        d3: Option<Flex<'d>>,
+        d4: Option<Flex<'d>>,
+        d5: Option<Flex<'d>>,
+        d6: Option<Flex<'d>>,
+        d7: Option<Flex<'d>>,
         config: Config,
     ) -> Self {
-        rcc::enable_and_reset_without_stop::<T>();
+        rcc::enable_and_reset::<T>();
 
         T::Interrupt::unpend();
         unsafe { T::Interrupt::enable() };
@@ -788,15 +707,15 @@ impl<'d> Sdmmc<'d> {
             #[cfg(sdmmc_v1)]
             dma,
 
-            clk,
-            cmd,
-            d0,
-            d1,
-            d2,
+            _clk: clk,
+            _cmd: cmd,
+            _d0: d0,
+            _d1: d1,
+            _d2: d2,
             d3,
-            d4,
-            d5,
-            d6,
+            _d4: d4,
+            _d5: d5,
+            _d6: d6,
             d7,
 
             config,
@@ -811,7 +730,7 @@ impl<'d> Sdmmc<'d> {
         let status = regs.star().read();
         #[cfg(sdmmc_v1)]
         return status.rxact() || status.txact();
-        #[cfg(sdmmc_v2)]
+        #[cfg(any(sdmmc_v2, sdmmc_v3))]
         return status.dpsmact();
     }
 
@@ -823,7 +742,7 @@ impl<'d> Sdmmc<'d> {
         let status = regs.star().read();
         #[cfg(sdmmc_v1)]
         return status.cmdact();
-        #[cfg(sdmmc_v2)]
+        #[cfg(any(sdmmc_v2, sdmmc_v3))]
         return status.cpsmact();
     }
 
@@ -861,10 +780,9 @@ impl<'d> Sdmmc<'d> {
         self.wait_idle();
         self.clear_interrupt_flags();
 
-        regs.dlenr().write(|w| w.set_datalength(size_of_val(buffer) as u32));
-
-        // Memory barrier before DMA setup to ensure any pending memory writes complete
-        dsb();
+        // Use buffer.len() not size_of_val: Aligned<A4, [u8]> is #[repr(C)]
+        // with alignment 4, so size_of_val rounds up to a multiple of 4.
+        regs.dlenr().write(|w| w.set_datalength(buffer.len() as u32));
 
         // SAFETY: No other functions use the dma
         #[cfg(sdmmc_v1)]
@@ -886,8 +804,18 @@ impl<'d> Sdmmc<'d> {
                 _dummy: core::marker::PhantomData,
             }
         };
+        #[cfg(sdmmc_v3)]
+        let transfer = {
+            // v3 uses single-buffer IDMA: program base + size, then enable.
+            regs.idmabaser().write(|w| w.set_idmabase(buffer.as_mut_ptr() as u32));
+            regs.idmabsizer().write(|w| w.set_idmabndt(buffer.len() as u16));
+            regs.idmactrlr().modify(|w| w.set_idmaen(true));
+            Transfer {
+                _dummy: core::marker::PhantomData,
+            }
+        };
 
-        #[cfg(sdmmc_v2)]
+        #[cfg(any(sdmmc_v2, sdmmc_v3))]
         let byte_mode = byte_mode as u8;
 
         regs.dctrl().modify(|w| {
@@ -902,7 +830,7 @@ impl<'d> Sdmmc<'d> {
         });
 
         // Memory barrier after DMA setup to ensure register writes complete before command
-        dsb();
+        fence(Ordering::SeqCst);
 
         self.enable_interrupts();
 
@@ -924,10 +852,9 @@ impl<'d> Sdmmc<'d> {
         self.wait_idle();
         self.clear_interrupt_flags();
 
-        regs.dlenr().write(|w| w.set_datalength(size_of_val(buffer) as u32));
-
-        // Memory barrier before DMA setup to ensure buffer data is visible to DMA
-        dsb();
+        // Use buffer.len() not size_of_val: Aligned<A4, [u8]> is #[repr(C)]
+        // with alignment 4, so size_of_val rounds up to a multiple of 4.
+        regs.dlenr().write(|w| w.set_datalength(buffer.len() as u32));
 
         // SAFETY: No other functions use the dma
         #[cfg(sdmmc_v1)]
@@ -949,8 +876,17 @@ impl<'d> Sdmmc<'d> {
                 _dummy: core::marker::PhantomData,
             }
         };
+        #[cfg(sdmmc_v3)]
+        let transfer = {
+            regs.idmabaser().write(|w| w.set_idmabase(buffer.as_ptr() as u32));
+            regs.idmabsizer().write(|w| w.set_idmabndt(buffer.len() as u16));
+            regs.idmactrlr().modify(|w| w.set_idmaen(true));
+            Transfer {
+                _dummy: core::marker::PhantomData,
+            }
+        };
 
-        #[cfg(sdmmc_v2)]
+        #[cfg(any(sdmmc_v2, sdmmc_v3))]
         let byte_mode = byte_mode as u8;
 
         regs.dctrl().modify(|w| {
@@ -965,7 +901,7 @@ impl<'d> Sdmmc<'d> {
         });
 
         // Memory barrier after DMA setup to ensure register writes complete before command
-        dsb();
+        fence(Ordering::SeqCst);
 
         self.enable_interrupts();
 
@@ -981,7 +917,7 @@ impl<'d> Sdmmc<'d> {
             w.set_dmaen(false);
             w.set_dten(false);
         });
-        #[cfg(sdmmc_v2)]
+        #[cfg(any(sdmmc_v2, sdmmc_v3))]
         regs.idmactrlr().modify(|w| w.set_idmaen(false));
     }
 
@@ -1068,7 +1004,7 @@ impl<'d> Sdmmc<'d> {
             #[cfg(sdmmc_v1)]
             w.set_stbiterrc(true);
 
-            #[cfg(sdmmc_v2)]
+            #[cfg(any(sdmmc_v2, sdmmc_v3))]
             {
                 w.set_dholdc(true);
                 w.set_dabortc(true);
@@ -1102,7 +1038,7 @@ impl<'d> Sdmmc<'d> {
             w.set_cmdindex(cmd.cmd);
             w.set_cpsmen(true);
 
-            #[cfg(sdmmc_v2)]
+            #[cfg(any(sdmmc_v2, sdmmc_v3))]
             {
                 // Special mode in CP State Machine
                 // CMD12: Stop Transmission
@@ -1170,7 +1106,7 @@ impl<'d> Sdmmc<'d> {
                 w.set_cmdindex(12);
                 w.set_cpsmen(true);
 
-                #[cfg(sdmmc_v2)]
+                #[cfg(any(sdmmc_v2, sdmmc_v3))]
                 {
                     w.set_cmdstop(true);
                     w.set_cmdtrans(false);
@@ -1213,7 +1149,7 @@ impl<'d> Sdmmc<'d> {
                 true => status.dbckend(),
                 false => status.dataend(),
             };
-            #[cfg(sdmmc_v2)]
+            #[cfg(any(sdmmc_v2, sdmmc_v3))]
             let done = status.dataend();
             if done {
                 return Poll::Ready(Ok(()));
@@ -1223,7 +1159,7 @@ impl<'d> Sdmmc<'d> {
         .await;
 
         // Memory barrier after DMA completion to ensure CPU sees DMA-written data
-        dsb();
+        fence(Ordering::Acquire);
 
         self.clear_interrupt_flags();
         self.stop_datapath();
@@ -1241,34 +1177,7 @@ impl<'d> Drop for Sdmmc<'d> {
     fn drop(&mut self) {
         // T::Interrupt::disable();
         self.on_drop();
-        self.info.rcc.disable_without_stop();
-
-        critical_section::with(|_| {
-            self.clk.set_as_disconnected();
-            self.cmd.set_as_disconnected();
-            self.d0.set_as_disconnected();
-            if let Some(x) = &mut self.d1 {
-                x.set_as_disconnected();
-            }
-            if let Some(x) = &mut self.d2 {
-                x.set_as_disconnected();
-            }
-            if let Some(x) = &mut self.d3 {
-                x.set_as_disconnected();
-            }
-            if let Some(x) = &mut self.d4 {
-                x.set_as_disconnected();
-            }
-            if let Some(x) = &mut self.d5 {
-                x.set_as_disconnected();
-            }
-            if let Some(x) = &mut self.d6 {
-                x.set_as_disconnected();
-            }
-            if let Some(x) = &mut self.d7 {
-                x.set_as_disconnected();
-            }
-        });
+        self.info.rcc.disable();
     }
 }
 

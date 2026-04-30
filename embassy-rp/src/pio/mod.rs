@@ -2,7 +2,7 @@
 use core::future::Future;
 use core::marker::PhantomData;
 use core::pin::Pin as FuturePin;
-use core::sync::atomic::{AtomicU8, AtomicU32, Ordering, compiler_fence};
+use core::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use core::task::{Context, Poll};
 
 use embassy_hal_internal::{Peri, PeripheralType};
@@ -247,10 +247,10 @@ impl<'l, PIO: Instance> Pin<'l, PIO> {
     pub fn set_drive_strength(&mut self, strength: Drive) {
         self.pin.pad_ctrl().modify(|w| {
             w.set_drive(match strength {
-                Drive::_2mA => pac::pads::vals::Drive::_2M_A,
-                Drive::_4mA => pac::pads::vals::Drive::_4M_A,
-                Drive::_8mA => pac::pads::vals::Drive::_8M_A,
-                Drive::_12mA => pac::pads::vals::Drive::_12M_A,
+                Drive::_2mA => pac::pads::vals::Drive::_2mA,
+                Drive::_4mA => pac::pads::vals::Drive::_4mA,
+                Drive::_8mA => pac::pads::vals::Drive::_8mA,
+                Drive::_12mA => pac::pads::vals::Drive::_12mA,
             });
         });
     }
@@ -285,9 +285,9 @@ impl<'l, PIO: Instance> Pin<'l, PIO> {
     pub fn set_output_inversion(&mut self, invert: bool) {
         self.pin.gpio().ctrl().modify(|w| {
             w.set_outover(if invert {
-                pac::io::vals::Outover::INVERT
+                pac::io::vals::Outover::Invert
             } else {
-                pac::io::vals::Outover::NORMAL
+                pac::io::vals::Outover::Normal
             })
         });
     }
@@ -297,9 +297,9 @@ impl<'l, PIO: Instance> Pin<'l, PIO> {
     pub fn set_output_enable_inversion(&mut self, invert: bool) {
         self.pin.gpio().ctrl().modify(|w| {
             w.set_oeover(if invert {
-                pac::io::vals::Oeover::INVERT
+                pac::io::vals::Oeover::Invert
             } else {
-                pac::io::vals::Oeover::NORMAL
+                pac::io::vals::Oeover::Normal
             })
         })
     }
@@ -394,55 +394,12 @@ impl<'d, PIO: Instance, const SM: usize> StateMachineRx<'d, PIO, SM> {
         data: &'a mut [W],
         bswap: bool,
     ) -> Transfer<'a> {
-        let p = ch.regs();
-        p.write_addr().write_value(data.as_ptr() as u32);
-        p.read_addr().write_value(PIO::PIO.rxf(SM).as_ptr() as u32);
-        #[cfg(feature = "rp2040")]
-        p.trans_count().write(|w| *w = data.len() as u32);
-        #[cfg(feature = "_rp235x")]
-        p.trans_count().write(|w| w.set_count(data.len() as u32));
-        compiler_fence(Ordering::SeqCst);
-        p.ctrl_trig().write(|w| {
-            w.set_treq_sel(Self::dreq());
-            w.set_data_size(W::size());
-            w.set_chain_to(ch.number());
-            w.set_incr_read(false);
-            w.set_incr_write(true);
-            w.set_bswap(bswap);
-            w.set_en(true);
-        });
-        compiler_fence(Ordering::SeqCst);
-        Transfer::new(ch.reborrow())
+        unsafe { ch.read(PIO::PIO.rxf(SM).as_ptr() as *const W, data, Self::dreq(), bswap) }
     }
 
     /// Prepare a repeated DMA transfer from RX FIFO.
-    pub fn dma_pull_repeated<'a, W: Word>(&'a mut self, ch: &'a mut dma::Channel<'_>, len: usize) -> Transfer<'a> {
-        // This is the read version of dma::write_repeated. This allows us to
-        // discard reads from the RX FIFO through DMA.
-
-        // static mut so it gets allocated in RAM
-        static mut DUMMY: u32 = 0;
-
-        let p = ch.regs();
-        p.write_addr().write_value(core::ptr::addr_of_mut!(DUMMY) as u32);
-        p.read_addr().write_value(PIO::PIO.rxf(SM).as_ptr() as u32);
-
-        #[cfg(feature = "rp2040")]
-        p.trans_count().write(|w| *w = len as u32);
-        #[cfg(feature = "_rp235x")]
-        p.trans_count().write(|w| w.set_count(len as u32));
-
-        compiler_fence(Ordering::SeqCst);
-        p.ctrl_trig().write(|w| {
-            w.set_treq_sel(Self::dreq());
-            w.set_data_size(W::size());
-            w.set_chain_to(ch.number());
-            w.set_incr_read(false);
-            w.set_incr_write(false);
-            w.set_en(true);
-        });
-        compiler_fence(Ordering::SeqCst);
-        Transfer::new(ch.reborrow())
+    pub fn dma_pull_discard<'a, W: Word>(&'a mut self, ch: &'a mut dma::Channel<'_>, len: usize) -> Transfer<'a> {
+        unsafe { ch.read_discard(PIO::PIO.rxf(SM).as_ptr(), len, Self::dreq()) }
     }
 }
 
@@ -517,30 +474,12 @@ impl<'d, PIO: Instance, const SM: usize> StateMachineTx<'d, PIO, SM> {
         data: &'a [W],
         bswap: bool,
     ) -> Transfer<'a> {
-        let p = ch.regs();
-        p.read_addr().write_value(data.as_ptr() as u32);
-        p.write_addr().write_value(PIO::PIO.txf(SM).as_ptr() as u32);
-        #[cfg(feature = "rp2040")]
-        p.trans_count().write(|w| *w = data.len() as u32);
-        #[cfg(feature = "_rp235x")]
-        p.trans_count().write(|w| w.set_count(data.len() as u32));
-        compiler_fence(Ordering::SeqCst);
-        p.ctrl_trig().write(|w| {
-            w.set_treq_sel(Self::dreq());
-            w.set_data_size(W::size());
-            w.set_chain_to(ch.number());
-            w.set_incr_read(true);
-            w.set_incr_write(false);
-            w.set_bswap(bswap);
-            w.set_en(true);
-        });
-        compiler_fence(Ordering::SeqCst);
-        Transfer::new(ch.reborrow())
+        unsafe { ch.write(data, PIO::PIO.txf(SM).as_ptr() as *mut W, Self::dreq(), bswap) }
     }
 
     /// Prepare a repeated DMA transfer to TX FIFO.
-    pub fn dma_push_repeated<'a, W: Word>(&'a mut self, ch: &'a mut dma::Channel<'_>, len: usize) -> Transfer<'a> {
-        unsafe { ch.write_repeated(len, PIO::PIO.txf(SM).as_ptr() as *mut W, Self::dreq()) }
+    pub fn dma_push_zeros<'a, W: Word>(&'a mut self, ch: &'a mut dma::Channel<'_>, len: usize) -> Transfer<'a> {
+        unsafe { ch.write_zeros(len, PIO::PIO.txf(SM).as_ptr() as *mut W, Self::dreq()) }
     }
 }
 
@@ -643,7 +582,7 @@ impl Into<crate::pac::pio::vals::ExecctrlStatusN> for StatusN {
             StatusN::Higher(n) => n + 0x10,
         };
 
-        crate::pac::pio::vals::ExecctrlStatusN(x)
+        crate::pac::pio::vals::ExecctrlStatusN::from_bits(x)
     }
 }
 
@@ -799,14 +738,14 @@ impl<'d, PIO: Instance + 'd, const SM: usize> StateMachine<'d, PIO, SM> {
             w.set_wrap_bottom(config.exec.wrap_bottom);
             #[cfg(feature = "_rp235x")]
             w.set_status_sel(match config.status_sel {
-                StatusSource::TxFifoLevel => pac::pio::vals::ExecctrlStatusSel::TXLEVEL,
-                StatusSource::RxFifoLevel => pac::pio::vals::ExecctrlStatusSel::RXLEVEL,
-                StatusSource::Irq => pac::pio::vals::ExecctrlStatusSel::IRQ,
+                StatusSource::TxFifoLevel => pac::pio::vals::ExecctrlStatusSel::Txlevel,
+                StatusSource::RxFifoLevel => pac::pio::vals::ExecctrlStatusSel::Rxlevel,
+                StatusSource::Irq => pac::pio::vals::ExecctrlStatusSel::Irq,
             });
             #[cfg(feature = "rp2040")]
             w.set_status_sel(match config.status_sel {
-                StatusSource::TxFifoLevel => pac::pio::vals::SmExecctrlStatusSel::TXLEVEL,
-                StatusSource::RxFifoLevel => pac::pio::vals::SmExecctrlStatusSel::RXLEVEL,
+                StatusSource::TxFifoLevel => pac::pio::vals::SmExecctrlStatusSel::Txlevel,
+                StatusSource::RxFifoLevel => pac::pio::vals::SmExecctrlStatusSel::Rxlevel,
             });
             w.set_status_n(config.status_n.into());
         });
@@ -891,6 +830,26 @@ impl<'d, PIO: Instance + 'd, const SM: usize> StateMachine<'d, PIO, SM> {
         if let Some(origin) = config.origin {
             unsafe { self.exec_jmp(origin) }
         }
+    }
+
+    /// Get pointer to rx fifo
+    pub fn rx_fifo_ptr(&self) -> *mut u32 {
+        PIO::PIO.rxf(SM).as_ptr()
+    }
+
+    /// Get pointer to tx fifo
+    pub fn tx_fifo_ptr(&self) -> *mut u32 {
+        PIO::PIO.txf(SM).as_ptr()
+    }
+
+    /// Get dma Treq of rx fifo
+    pub fn rx_treq(&self) -> crate::pac::dma::vals::TreqSel {
+        StateMachineRx::<PIO, SM>::dreq()
+    }
+
+    /// Get dma Treq of tx fifo
+    pub fn tx_treq(&self) -> crate::pac::dma::vals::TreqSel {
+        StateMachineTx::<PIO, SM>::dreq()
     }
 
     /// Read current instruction address for this state machine
@@ -1481,7 +1440,7 @@ fn on_pio_drop<PIO: Instance>() {
     });
     if users_state == 1 {
         let used_pins = state.used_pins.load(Ordering::Relaxed);
-        let null = pac::io::vals::Gpio0ctrlFuncsel::NULL as _;
+        let null = pac::io::vals::Gpio0CtrlFuncsel::Null as _;
         for i in 0..crate::gpio::BANK0_PIN_COUNT {
             if used_pins & (1 << i) != 0 {
                 pac::IO_BANK0.gpio(i).ctrl().write(|w| w.set_funcsel(null));
@@ -1493,7 +1452,7 @@ fn on_pio_drop<PIO: Instance>() {
 trait SealedInstance {
     const PIO_NO: u8;
     const PIO: &'static crate::pac::pio::Pio;
-    const FUNCSEL: crate::pac::io::vals::Gpio0ctrlFuncsel;
+    const FUNCSEL: crate::pac::io::vals::Gpio0CtrlFuncsel;
 
     #[inline]
     fn wakers() -> &'static Wakers {
@@ -1503,12 +1462,37 @@ trait SealedInstance {
 
     #[inline]
     fn state() -> &'static State {
-        static STATE: State = State {
-            users: AtomicU8::new(0),
-            used_pins: AtomicU64::new(0),
-        };
+        match Self::PIO_NO {
+            0 => {
+                static STATE_0: State = State {
+                    users: AtomicU8::new(0),
+                    used_pins: AtomicU64::new(0),
+                };
 
-        &STATE
+                &STATE_0
+            }
+            1 => {
+                static STATE_1: State = State {
+                    users: AtomicU8::new(0),
+                    used_pins: AtomicU64::new(0),
+                };
+
+                &STATE_1
+            }
+            #[cfg(feature = "_rp235x")]
+            2 => {
+                static STATE_2: State = State {
+                    users: AtomicU8::new(0),
+                    used_pins: AtomicU64::new(0),
+                };
+
+                &STATE_2
+            }
+            #[cfg(feature = "_rp235x")]
+            _ => panic!("Invalid PIO_NO: {}, expected one of 0,1,2", Self::PIO_NO),
+            #[cfg(not(feature = "_rp235x"))]
+            _ => panic!("Invalid PIO_NO: {}, expected one of 0,1", Self::PIO_NO),
+        }
     }
 }
 
@@ -1524,7 +1508,7 @@ macro_rules! impl_pio {
         impl SealedInstance for peripherals::$name {
             const PIO_NO: u8 = $pio;
             const PIO: &'static pac::pio::Pio = &pac::$pac;
-            const FUNCSEL: pac::io::vals::Gpio0ctrlFuncsel = pac::io::vals::Gpio0ctrlFuncsel::$funcsel;
+            const FUNCSEL: pac::io::vals::Gpio0CtrlFuncsel = pac::io::vals::Gpio0CtrlFuncsel::$funcsel;
         }
         impl Instance for peripherals::$name {
             type Interrupt = crate::interrupt::typelevel::$irq;
@@ -1532,10 +1516,10 @@ macro_rules! impl_pio {
     };
 }
 
-impl_pio!(PIO0, 0, PIO0, PIO0_0, PIO0_IRQ_0);
-impl_pio!(PIO1, 1, PIO1, PIO1_0, PIO1_IRQ_0);
+impl_pio!(PIO0, 0, PIO0, Pio00, PIO0_IRQ_0);
+impl_pio!(PIO1, 1, PIO1, Pio10, PIO1_IRQ_0);
 #[cfg(feature = "_rp235x")]
-impl_pio!(PIO2, 2, PIO2, PIO2_0, PIO2_IRQ_0);
+impl_pio!(PIO2, 2, PIO2, Pio20, PIO2_IRQ_0);
 
 /// PIO pin.
 pub trait PioPin: gpio::Pin {}

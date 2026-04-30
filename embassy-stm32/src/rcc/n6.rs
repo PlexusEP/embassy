@@ -46,10 +46,10 @@ pub enum SupplyConfig {
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum CpuClk {
-    Hse,
-    Ic1 { source: Icsel, divider: Icint },
-    Msi,
     Hsi,
+    Msi,
+    Hse,
+    Ic1,
 }
 
 impl CpuClk {
@@ -58,7 +58,7 @@ impl CpuClk {
             Self::Hsi => 0x0,
             Self::Msi => 0x1,
             Self::Hse => 0x2,
-            Self::Ic1 { .. } => 0x3,
+            Self::Ic1 => 0x3,
         }
     }
 }
@@ -76,14 +76,10 @@ pub struct IcConfig {
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum SysClk {
-    Hse,
-    Ic2 {
-        ic2: IcConfig,
-        ic6: IcConfig,
-        ic11: IcConfig,
-    },
-    Msi,
     Hsi,
+    Msi,
+    Hse,
+    Ic2,
 }
 
 impl SysClk {
@@ -92,7 +88,7 @@ impl SysClk {
             Self::Hsi => 0x0,
             Self::Msi => 0x1,
             Self::Hse => 0x2,
-            Self::Ic2 { .. } => 0x3,
+            Self::Ic2 => 0x3,
         }
     }
 }
@@ -128,18 +124,34 @@ pub struct Config {
     pub lsi: bool,
     pub lse: bool,
 
-    pub sys: SysClk,
     pub cpu: CpuClk,
+    pub sys: SysClk,
 
     pub pll1: Option<Pll>,
     pub pll2: Option<Pll>,
     pub pll3: Option<Pll>,
     pub pll4: Option<Pll>,
 
-    /// IC3 kernel clock configuration (used by XSPI1)
+    pub ic1: Option<IcConfig>,
+    pub ic2: Option<IcConfig>,
     pub ic3: Option<IcConfig>,
-    /// IC4 kernel clock configuration (used by XSPI2)
     pub ic4: Option<IcConfig>,
+    pub ic5: Option<IcConfig>,
+    pub ic6: Option<IcConfig>,
+    pub ic7: Option<IcConfig>,
+    pub ic8: Option<IcConfig>,
+    pub ic9: Option<IcConfig>,
+    pub ic10: Option<IcConfig>,
+    pub ic11: Option<IcConfig>,
+    pub ic12: Option<IcConfig>,
+    pub ic13: Option<IcConfig>,
+    pub ic14: Option<IcConfig>,
+    pub ic15: Option<IcConfig>,
+    pub ic16: Option<IcConfig>,
+    pub ic17: Option<IcConfig>,
+    pub ic18: Option<IcConfig>,
+    pub ic19: Option<IcConfig>,
+    pub ic20: Option<IcConfig>,
 
     pub ahb: AhbPrescaler,
     pub apb1: ApbPrescaler,
@@ -156,52 +168,63 @@ pub struct Config {
     /// true = 1.8V, false = 3.3V (default)
     pub vddio3_1v8: bool,
 
-    /// XSPI1 kernel clock source selection
-    /// Default: HCLK5
-    pub xspi1_clk_src: XspiClkSrc,
-    /// XSPI2 kernel clock source selection
-    /// Default: HCLK5
-    pub xspi2_clk_src: XspiClkSrc,
-    /// XSPI3 kernel clock source selection
-    /// Default: HCLK5
-    pub xspi3_clk_src: XspiClkSrc,
+    /// Per-peripheral kernel clock selection muxes
+    pub mux: super::mux::ClockMux,
 }
 
 impl Config {
     pub const fn new() -> Self {
         Self {
             hsi: Some(Hsi {
-                pre: HsiPrescaler::DIV1,
+                pre: HsiPrescaler::Div1,
                 trim: HsiCalibration::from_bits(32),
             }),
             hse: None,
             msi: None,
             lsi: true,
             lse: false,
-            sys: SysClk::Hsi,
-            cpu: CpuClk::Hsi,
-            pll1: Some(Pll::Bypass { source: Pllsel::HSI }),
-            pll2: Some(Pll::Bypass { source: Pllsel::HSI }),
-            pll3: Some(Pll::Bypass { source: Pllsel::HSI }),
-            pll4: Some(Pll::Bypass { source: Pllsel::HSI }),
 
+            cpu: CpuClk::Hsi,
+            sys: SysClk::Hsi,
+
+            pll1: Some(Pll::Bypass { source: Pllsel::Hsi }),
+            pll2: Some(Pll::Bypass { source: Pllsel::Hsi }),
+            pll3: Some(Pll::Bypass { source: Pllsel::Hsi }),
+            pll4: Some(Pll::Bypass { source: Pllsel::Hsi }),
+
+            ic1: None,
+            ic2: None,
             ic3: None,
             ic4: None,
+            ic5: None,
+            ic6: None,
+            ic7: None,
+            ic8: None,
+            ic9: None,
+            ic10: None,
+            ic11: None,
+            ic12: None,
+            ic13: None,
+            ic14: None,
+            ic15: None,
+            ic16: None,
+            ic17: None,
+            ic18: None,
+            ic19: None,
+            ic20: None,
 
-            ahb: AhbPrescaler::DIV2,
-            apb1: ApbPrescaler::DIV1,
-            apb2: ApbPrescaler::DIV1,
-            apb4: ApbPrescaler::DIV1,
-            apb5: ApbPrescaler::DIV1,
+            ahb: AhbPrescaler::Div2,
+            apb1: ApbPrescaler::Div1,
+            apb2: ApbPrescaler::Div1,
+            apb4: ApbPrescaler::Div1,
+            apb5: ApbPrescaler::Div1,
 
             supply_config: SupplyConfig::Smps,
 
             vddio2_1v8: false, // Default to 3.3V
             vddio3_1v8: false, // Default to 3.3V
 
-            xspi1_clk_src: XspiClkSrc::HCLK5,
-            xspi2_clk_src: XspiClkSrc::HCLK5,
-            xspi3_clk_src: XspiClkSrc::HCLK5,
+            mux: super::mux::ClockMux::default(),
         }
     }
 }
@@ -220,13 +243,77 @@ struct ClocksOutput {
 
 struct ClocksInput {
     hsi: Option<Hertz>,
+    hsi_div: Option<Hertz>,
     msi: Option<Hertz>,
     hse: Option<Hertz>,
-    pll1: Option<Hertz>,
-    pll2: Option<Hertz>,
+    ic1: Option<Hertz>,
+    ic2: Option<Hertz>,
+    ic3: Option<Hertz>,
+    ic4: Option<Hertz>,
+    ic5: Option<Hertz>,
+    ic6: Option<Hertz>,
+    ic7: Option<Hertz>,
+    ic8: Option<Hertz>,
+    ic9: Option<Hertz>,
+    ic10: Option<Hertz>,
+    ic11: Option<Hertz>,
+    ic12: Option<Hertz>,
+    ic13: Option<Hertz>,
+    ic14: Option<Hertz>,
+    ic15: Option<Hertz>,
+    ic16: Option<Hertz>,
+    ic17: Option<Hertz>,
+    ic18: Option<Hertz>,
+    ic19: Option<Hertz>,
+    ic20: Option<Hertz>,
 }
 
 fn init_clocks(config: Config, input: &ClocksInput) -> ClocksOutput {
+    // IC configuration
+    for (index, ic) in [
+        config.ic1,
+        config.ic2,
+        config.ic3,
+        config.ic4,
+        config.ic5,
+        config.ic6,
+        config.ic7,
+        config.ic8,
+        config.ic9,
+        config.ic10,
+        config.ic11,
+        config.ic12,
+        config.ic13,
+        config.ic14,
+        config.ic15,
+        config.ic16,
+        config.ic17,
+        config.ic18,
+        config.ic19,
+        config.ic20,
+    ]
+    .iter()
+    .enumerate()
+    {
+        // Skip disabled ICs
+        let Some(ic) = ic else { continue };
+
+        let ic_source = ic.source.to_bits();
+        if !pll_source_ready(ic_source) {
+            panic!(
+                "IC{} source was set to PLL{}, but it is not currently enabled",
+                index + 1,
+                ic_source
+            )
+        }
+
+        RCC.iccfgr(index).write(|w| {
+            w.set_icsel(ic.source);
+            w.set_icint(ic.divider);
+        });
+        RCC.divensr().modify(|w| w.0 = 1 << index);
+    }
+
     // handle increasing dividers
     debug!("configuring increasing pclk dividers");
     RCC.cfgr2().modify(|w| {
@@ -254,20 +341,10 @@ fn init_clocks(config: Config, input: &ClocksInput) -> ClocksOutput {
     // cpuclk
     debug!("configuring cpuclk");
     match config.cpu {
-        CpuClk::Hse if !RCC.sr().read().hserdy() => panic!("HSE is not ready to be selected as CPU clock source"),
-        CpuClk::Ic1 { source, divider } => {
-            if !pll_sources_ready(RCC.iccfgr(0).read().icsel().to_bits(), source.to_bits()) {
-                panic!("ICx clock switch requires both origin and destination clock source to be active")
-            }
-
-            RCC.iccfgr(0).write(|w| {
-                w.set_icsel(source);
-                w.set_icint(divider);
-            });
-            RCC.divensr().modify(|w| w.set_ic1ens(true));
-        }
-        CpuClk::Msi if !RCC.sr().read().msirdy() => panic!("MSI is not ready to be selected as CPU clock source"),
         CpuClk::Hsi if !RCC.sr().read().hsirdy() => panic!("HSI is not ready to be selected as CPU clock source"),
+        CpuClk::Msi if !RCC.sr().read().msirdy() => panic!("MSI is not ready to be selected as CPU clock source"),
+        CpuClk::Hse if !RCC.sr().read().hserdy() => panic!("HSE is not ready to be selected as CPU clock source"),
+        CpuClk::Ic1 if !ic_enabled(1) => panic!("IC1 is not ready to be selected as CPU clock source"),
         _ => {}
     }
     // set source
@@ -279,38 +356,12 @@ fn init_clocks(config: Config, input: &ClocksInput) -> ClocksOutput {
     // sysclk
     debug!("configuring sysclk");
     match config.sys {
-        SysClk::Hse if !RCC.sr().read().hserdy() => panic!("HSE is not ready to be selected as CPU clock source"),
-        SysClk::Ic2 { ic2, ic6, ic11 } => {
-            if !pll_sources_ready(RCC.iccfgr(1).read().icsel().to_bits(), ic2.source.to_bits()) {
-                panic!("IC2 clock switch requires both origin and destination clock source to be active")
-            }
-            if !pll_sources_ready(RCC.iccfgr(5).read().icsel().to_bits(), ic6.source.to_bits()) {
-                panic!("IC6 clock switch requires both origin and destination clock source to be active")
-            }
-            if !pll_sources_ready(RCC.iccfgr(10).read().icsel().to_bits(), ic11.source.to_bits()) {
-                panic!("IC11 clock switch requires both origin and destination clock source to be active")
-            }
-
-            RCC.iccfgr(1).write(|w| {
-                w.set_icsel(ic2.source);
-                w.set_icint(ic2.divider);
-            });
-            RCC.iccfgr(5).write(|w| {
-                w.set_icsel(ic6.source);
-                w.set_icint(ic6.divider);
-            });
-            RCC.iccfgr(10).write(|w| {
-                w.set_icsel(ic11.source);
-                w.set_icint(ic11.divider);
-            });
-            RCC.divensr().modify(|w| {
-                w.set_ic2ens(true);
-                w.set_ic6ens(true);
-                w.set_ic11ens(true);
-            });
-        }
-        SysClk::Msi if !RCC.sr().read().msirdy() => panic!("MSI is not ready to be selected as CPU clock source"),
-        SysClk::Hsi if !RCC.sr().read().hsirdy() => panic!("HSI is not ready to be selected as CPU clock source"),
+        SysClk::Hsi if !RCC.sr().read().hsirdy() => panic!("HSI is not ready to be selected as system clock source"),
+        SysClk::Msi if !RCC.sr().read().msirdy() => panic!("MSI is not ready to be selected as system clock source"),
+        SysClk::Hse if !RCC.sr().read().hserdy() => panic!("HSE is not ready to be selected as system clock source"),
+        SysClk::Ic2 if !ic_enabled(2) || !ic_enabled(6) || !ic_enabled(11) => panic!(
+            "IC2 is not ready to be selected as system clock source (make sure that IC6 and IC11 were configured as well)"
+        ),
         _ => {}
     }
     // switch the system bus clock
@@ -318,42 +369,6 @@ fn init_clocks(config: Config, input: &ClocksInput) -> ClocksOutput {
     RCC.cfgr().modify(|w| w.set_syssw(syssw));
     // wait for changes to be applied
     while RCC.cfgr().read().syssws() != Syssws::from_bits(config.sys.to_bits()) {}
-
-    // IC3 configuration (XSPI1 kernel clock)
-    debug!("configuring IC3");
-    if let Some(ic3) = config.ic3 {
-        if !pll_sources_ready(RCC.iccfgr(2).read().icsel().to_bits(), ic3.source.to_bits()) {
-            panic!("IC3 clock switch requires both origin and destination clock source to be active")
-        }
-
-        RCC.iccfgr(2).write(|w| {
-            w.set_icsel(ic3.source);
-            w.set_icint(ic3.divider);
-        });
-        RCC.divensr().modify(|w| w.set_ic3ens(true));
-    }
-
-    // IC4 configuration (XSPI2 kernel clock)
-    debug!("configuring IC4");
-    if let Some(ic4) = config.ic4 {
-        if !pll_sources_ready(RCC.iccfgr(3).read().icsel().to_bits(), ic4.source.to_bits()) {
-            panic!("IC4 clock switch requires both origin and destination clock source to be active")
-        }
-
-        RCC.iccfgr(3).write(|w| {
-            w.set_icsel(ic4.source);
-            w.set_icint(ic4.divider);
-        });
-        RCC.divensr().modify(|w| w.set_ic4ens(true));
-    }
-
-    // XSPI clock source configuration
-    debug!("configuring XSPI clock sources");
-    RCC.ccipr6().modify(|w| {
-        w.set_xspi1sel(config.xspi1_clk_src);
-        w.set_xspi2sel(config.xspi2_clk_src);
-        w.set_xspi3sel(config.xspi3_clk_src);
-    });
 
     // decreasing dividers
     debug!("configuring decreasing pclk dividers");
@@ -384,38 +399,20 @@ fn init_clocks(config: Config, input: &ClocksInput) -> ClocksOutput {
         CpuClk::Hsi => unwrap!(input.hsi),
         CpuClk::Msi => unwrap!(input.msi),
         CpuClk::Hse => unwrap!(input.hse),
-        CpuClk::Ic1 { source, divider } => {
-            let src_freq = match source {
-                Icsel::PLL1 => unwrap!(input.pll1),
-                Icsel::PLL2 => unwrap!(input.pll2),
-                Icsel::HSI_OSC_DIV4 => Hertz(unwrap!(input.hsi).0 / 4),
-                Icsel::HSI_OSC_DIV8 => Hertz(unwrap!(input.hsi).0 / 8),
-            };
-            let div = (divider.to_bits() as u32) + 1;
-            Hertz(src_freq.0 / div)
-        }
+        CpuClk::Ic1 => unwrap!(input.ic1),
     };
 
     let sysclk = match config.sys {
         SysClk::Hsi => unwrap!(input.hsi),
         SysClk::Msi => unwrap!(input.msi),
         SysClk::Hse => unwrap!(input.hse),
-        SysClk::Ic2 { ic2, .. } => {
-            let src_freq = match ic2.source {
-                Icsel::PLL1 => unwrap!(input.pll1),
-                Icsel::PLL2 => unwrap!(input.pll2),
-                Icsel::HSI_OSC_DIV4 => Hertz(unwrap!(input.hsi).0 / 4),
-                Icsel::HSI_OSC_DIV8 => Hertz(unwrap!(input.hsi).0 / 8),
-            };
-            let div = (ic2.divider.to_bits() as u32) + 1;
-            Hertz(src_freq.0 / div)
-        }
+        SysClk::Ic2 => unwrap!(input.ic2),
     };
 
     let timpre: u32 = match RCC.cfgr2().read().timpre() {
-        Timpre::DIV1 => 1,
-        Timpre::DIV2 => 2,
-        Timpre::DIV4 => 4,
+        Timpre::Div1 => 1,
+        Timpre::Div2 => 2,
+        Timpre::Div4 => 4,
         Timpre::_RESERVED_3 => 8,
     };
 
@@ -434,8 +431,8 @@ fn init_clocks(config: Config, input: &ClocksInput) -> ClocksOutput {
     }
 
     ClocksOutput {
-        sysclk,
         cpuclk,
+        sysclk,
         pclk_tim: sysclk / timpre,
         ahb: Hertz(sysclk.0 / hpre as u32),
         apb1: sysclk / hpre / ppre1,
@@ -590,7 +587,7 @@ fn enable_low_power_peripherals() {
         w.set_csilpen(true);
         w.set_venclpen(true);
         w.set_gfxtimlpen(true);
-        w.set_dcmilpen(true);
+        w.set_dcmipplpen(true);
         w.set_ltdclpen(true);
     });
 
@@ -637,16 +634,16 @@ const fn periph_prescaler_to_value(bits: u8) -> u8 {
 
 fn pll_source_ready(source: u8) -> bool {
     match source {
-        0x0 if !RCC.sr().read().pllrdy(0) && !RCC.pllcfgr1(0).read().pllbyp() => false,
-        0x1 if !RCC.sr().read().pllrdy(1) && !RCC.pllcfgr1(1).read().pllbyp() => false,
-        0x2 if !RCC.sr().read().pllrdy(2) && !RCC.pllcfgr1(2).read().pllbyp() => false,
-        0x3 if !RCC.sr().read().pllrdy(3) && !RCC.pllcfgr1(3).read().pllbyp() => false,
-        _ => true,
+        0x0 if RCC.sr().read().pllrdy(0) || RCC.pllcfgr1(0).read().pllbyp() => true,
+        0x1 if RCC.sr().read().pllrdy(1) || RCC.pllcfgr1(1).read().pllbyp() => true,
+        0x2 if RCC.sr().read().pllrdy(2) || RCC.pllcfgr1(2).read().pllbyp() => true,
+        0x3 if RCC.sr().read().pllrdy(3) || RCC.pllcfgr1(3).read().pllbyp() => true,
+        _ => false,
     }
 }
 
-fn pll_sources_ready(source1: u8, source2: u8) -> bool {
-    pll_source_ready(source1) && pll_source_ready(source2)
+fn ic_enabled(ic: u8) -> bool {
+    ic > 0 && ic <= 20 && ((RCC.divenr().read().0 >> (ic - 1)) & 0x1) != 0
 }
 
 impl Default for Config {
@@ -685,6 +682,19 @@ struct PllOutput {
     output: Option<Hertz>,
 }
 
+fn disable_pll(pll_index: usize) {
+    let cfgr1 = RCC.pllcfgr1(pll_index);
+    let cfgr3 = RCC.pllcfgr3(pll_index);
+
+    cfgr3.modify(|w| w.set_pllpdiven(false));
+    RCC.ccr().write(|w| w.set_pllonc(pll_index, true));
+    // wait till disabled
+    while RCC.sr().read().pllrdy(pll_index) {}
+
+    // clear bypass mode
+    cfgr1.modify(|w| w.set_pllbyp(false));
+}
+
 fn init_pll(pll_config: Option<Pll>, pll_index: usize, input: &PllInput) -> PllOutput {
     let cfgr1 = RCC.pllcfgr1(pll_index);
     let cfgr2 = RCC.pllcfgr2(pll_index);
@@ -706,7 +716,7 @@ fn init_pll(pll_config: Option<Pll>, pll_index: usize, input: &PllInput) -> PllO
             debug!("PLL{}: disabled", pll_index + 1);
 
             // ensure PLLxMODSSDIS=1 to work in fractional mode
-            cfgr3.modify(|w| w.set_pllmodssdis(Pllmodssdis::FRACTIONAL_DIVIDE));
+            cfgr3.modify(|w| w.set_pllmodssdis(Pllmodssdis::FractionalDivide));
             // clear bypass mode
             cfgr1.modify(|w| w.set_pllbyp(false));
             // configure the pll clock source, mul and div factors
@@ -717,10 +727,10 @@ fn init_pll(pll_config: Option<Pll>, pll_index: usize, input: &PllInput) -> PllO
             });
 
             let in_clk = match source {
-                Pllsel::HSI => unwrap!(input.hsi),
-                Pllsel::MSI => unwrap!(input.msi),
-                Pllsel::HSE => unwrap!(input.hse),
-                Pllsel::I2S_CKIN => unwrap!(input.i2s_ckin),
+                Pllsel::Hsi => unwrap!(input.hsi),
+                Pllsel::Msi => unwrap!(input.msi),
+                Pllsel::Hse => unwrap!(input.hse),
+                Pllsel::I2sCkin => unwrap!(input.i2s_ckin),
                 _ => panic!("reserved PLL source not allowed"),
             };
 
@@ -783,10 +793,10 @@ fn init_pll(pll_config: Option<Pll>, pll_index: usize, input: &PllInput) -> PllO
             });
 
             let in_clk = match source {
-                Pllsel::HSI => unwrap!(input.hsi),
-                Pllsel::MSI => unwrap!(input.msi),
-                Pllsel::HSE => unwrap!(input.hse),
-                Pllsel::I2S_CKIN => unwrap!(input.i2s_ckin),
+                Pllsel::Hsi => unwrap!(input.hsi),
+                Pllsel::Msi => unwrap!(input.msi),
+                Pllsel::Hse => unwrap!(input.hse),
+                Pllsel::I2sCkin => unwrap!(input.i2s_ckin),
                 _ => panic!("reserved PLL source not allowed"),
             };
 
@@ -796,13 +806,7 @@ fn init_pll(pll_config: Option<Pll>, pll_index: usize, input: &PllInput) -> PllO
             }
         }
         None => {
-            cfgr3.modify(|w| w.set_pllpdiven(false));
-            RCC.ccr().write(|w| w.set_pllonc(pll_index, true));
-            // wait till disabled
-            while RCC.sr().read().pllrdy(pll_index) {}
-
-            // clear bypass mode
-            cfgr1.modify(|w| w.set_pllbyp(false));
+            disable_pll(pll_index);
 
             PllOutput::default()
         }
@@ -812,6 +816,9 @@ fn init_pll(pll_config: Option<Pll>, pll_index: usize, input: &PllInput) -> PllO
 #[allow(dead_code)]
 struct OscOutput {
     hsi: Option<Hertz>,
+    /// `hsi_div_ck` per RM0486 §14.4.5 — a separate, always-on output of the
+    /// HSI block, equal to `hsi_ck / HSIDIV`. Present whenever HSI is on.
+    hsi_div: Option<Hertz>,
     hse: Option<Hertz>,
     msi: Option<Hertz>,
     lsi: Option<Hertz>,
@@ -849,14 +856,14 @@ fn init_osc(config: Config) -> OscOutput {
                 debug!("HSE in bypass mode");
                 RCC.hsecfgr().modify(|w| {
                     w.set_hsebyp(true);
-                    w.set_hseext(Hseext::ANALOG);
+                    w.set_hseext(Hseext::Analog);
                 });
             }
             HseMode::BypassDigital => {
                 debug!("HSE in bypass digital mode");
                 RCC.hsecfgr().modify(|w| {
                     w.set_hsebyp(true);
-                    w.set_hseext(Hseext::DIGITAL);
+                    w.set_hseext(Hseext::Digital);
                 });
             }
         }
@@ -866,12 +873,12 @@ fn init_osc(config: Config) -> OscOutput {
         while !RCC.sr().read().hserdy() {}
 
         Some(hse.freq)
-    } else if cpu_src == Cpusws::HSE
-        || sys_src == Syssws::HSE
-        || (pll1_src == Pllsel::HSE && rcc_sr.pllrdy(0))
-        || (pll2_src == Pllsel::HSE && rcc_sr.pllrdy(1))
-        || (pll3_src == Pllsel::HSE && rcc_sr.pllrdy(2))
-        || (pll4_src == Pllsel::HSE && rcc_sr.pllrdy(3))
+    } else if cpu_src == Cpusws::Hse
+        || sys_src == Syssws::Hse
+        || (pll1_src == Pllsel::Hse && rcc_sr.pllrdy(0))
+        || (pll2_src == Pllsel::Hse && rcc_sr.pllrdy(1))
+        || (pll3_src == Pllsel::Hse && rcc_sr.pllrdy(2))
+        || (pll4_src == Pllsel::Hse && rcc_sr.pllrdy(3))
     {
         panic!(
             "When the HSE is used as cpu/system bus clock or clock source for any PLL, it is not allowed to be disabled"
@@ -881,7 +888,7 @@ fn init_osc(config: Config) -> OscOutput {
 
         RCC.ccr().write(|w| w.set_hseonc(true));
         RCC.hsecfgr().modify(|w| {
-            w.set_hseext(Hseext::ANALOG);
+            w.set_hseext(Hseext::Analog);
             w.set_hsebyp(false);
         });
 
@@ -892,8 +899,19 @@ fn init_osc(config: Config) -> OscOutput {
     };
 
     // hsi configuration
+    //
+    // Per RM0486 §14.4.5 + §14.10.11, the HSI block produces two clock
+    // outputs whenever it's enabled:
+    //   * `hsi_ck`     — the raw 64 MHz oscillator output, used as PLL
+    //                    input and as a CPU/sys-clock candidate.
+    //   * `hsi_div_ck` — `hsi_ck / HSIDIV[1:0]` (00→/1, 01→/2, 10→/4,
+    //                    11→/8). Used as a peripheral kernel-clock
+    //                    source by the I2C / LTDC / DCMIPP / etc. muxes.
+    //
+    // We need to report both so peripherals that select `HsiDiv` see a
+    // running clock and don't trip the `mux.init()` runtime validator.
     debug!("configuring HSI");
-    let hsi = if let Some(hsi) = config.hsi {
+    let (hsi, hsi_div) = if let Some(hsi) = config.hsi {
         RCC.csr().write(|w| w.set_hsions(true));
         while !RCC.sr().read().hsirdy() {}
 
@@ -903,13 +921,13 @@ fn init_osc(config: Config) -> OscOutput {
             w.set_hsitrim(hsi.trim);
         });
 
-        Some(HSI_FREQ / hsi.pre)
-    } else if cpu_src == Cpusws::HSI
-        || sys_src == Syssws::HSI
-        || (pll1_src == Pllsel::HSI && rcc_sr.pllrdy(0))
-        || (pll2_src == Pllsel::HSI && rcc_sr.pllrdy(1))
-        || (pll3_src == Pllsel::HSI && rcc_sr.pllrdy(2))
-        || (pll4_src == Pllsel::HSI && rcc_sr.pllrdy(3))
+        (Some(HSI_FREQ), Some(HSI_FREQ / hsi.pre))
+    } else if cpu_src == Cpusws::Hsi
+        || sys_src == Syssws::Hsi
+        || (pll1_src == Pllsel::Hsi && rcc_sr.pllrdy(0))
+        || (pll2_src == Pllsel::Hsi && rcc_sr.pllrdy(1))
+        || (pll3_src == Pllsel::Hsi && rcc_sr.pllrdy(2))
+        || (pll4_src == Pllsel::Hsi && rcc_sr.pllrdy(3))
     {
         panic!(
             "When the HSI is used as cpu/system bus clock or clock source for any PLL, it is not allowed to be disabled"
@@ -920,7 +938,7 @@ fn init_osc(config: Config) -> OscOutput {
         RCC.ccr().write(|w| w.set_hsionc(true));
         while RCC.sr().read().hsirdy() {}
 
-        None
+        (None, None)
     };
 
     // msi configuration
@@ -932,15 +950,15 @@ fn init_osc(config: Config) -> OscOutput {
         RCC.msicfgr().modify(|w| w.set_msitrim(msi.trim));
 
         Some(match msi.freq {
-            Msifreqsel::_4MHZ => Hertz::mhz(4),
-            Msifreqsel::_16MHZ => Hertz::mhz(16),
+            Msifreqsel::_4mhz => Hertz::mhz(4),
+            Msifreqsel::_16mhz => Hertz::mhz(16),
         })
-    } else if cpu_src == Cpusws::MSI
-        || sys_src == Syssws::MSI
-        || (pll1_src == Pllsel::MSI && rcc_sr.pllrdy(0))
-        || (pll2_src == Pllsel::MSI && rcc_sr.pllrdy(1))
-        || (pll3_src == Pllsel::MSI && rcc_sr.pllrdy(2))
-        || (pll4_src == Pllsel::MSI && rcc_sr.pllrdy(3))
+    } else if cpu_src == Cpusws::Msi
+        || sys_src == Syssws::Msi
+        || (pll1_src == Pllsel::Msi && rcc_sr.pllrdy(0))
+        || (pll2_src == Pllsel::Msi && rcc_sr.pllrdy(1))
+        || (pll3_src == Pllsel::Msi && rcc_sr.pllrdy(2))
+        || (pll4_src == Pllsel::Msi && rcc_sr.pllrdy(3))
     {
         panic!(
             "When the MSI is used as cpu/system bus clock or clock source for any PLL, it is not allowed to be disabled"
@@ -995,7 +1013,7 @@ fn init_osc(config: Config) -> OscOutput {
     // If config wants a non-IC1 CPU source (HSI/HSE/MSI), switch now before
     // touching PLLs. This prevents panicking when trying to reconfigure a PLL
     // that's currently in use by IC1.
-    let cpu_src = if cpu_src == Cpusws::IC1 && !matches!(config.cpu, CpuClk::Ic1 { .. }) {
+    let cpu_src = if cpu_src == Cpusws::Ic1 && !matches!(config.cpu, CpuClk::Ic1 { .. }) {
         // Switch CPU clock to the target source first
         debug!("switching CPU away from IC1 before PLL reconfiguration");
         let cpusw = Cpusw::from_bits(config.cpu.to_bits());
@@ -1010,7 +1028,7 @@ fn init_osc(config: Config) -> OscOutput {
     // If config wants a non-IC2 sys source (HSI/HSE/MSI), switch now before
     // touching PLLs. This prevents panicking when trying to reconfigure a PLL
     // that's currently in use by IC2, IC6, or IC11.
-    let sys_src = if sys_src == Syssws::IC2 && !matches!(config.sys, SysClk::Ic2 { .. }) {
+    let sys_src = if sys_src == Syssws::Ic2 && !matches!(config.sys, SysClk::Ic2 { .. }) {
         // Switch system clock to the target source first
         debug!("switching sys clock away from IC2 before PLL reconfiguration");
         let syssw = Syssw::from_bits(config.sys.to_bits());
@@ -1029,15 +1047,21 @@ fn init_osc(config: Config) -> OscOutput {
         if is_new_pll_config(pll, n) {
             let this_pll = Icsel::from_bits(n as u8);
 
-            if cpu_src == Cpusws::IC1 && ic1_src == this_pll {
+            if cpu_src == Cpusws::Ic1 && ic1_src == this_pll {
                 panic!("PLL should not be disabled / reconfigured if used for IC1 (cpuclksrc)")
             }
 
-            if sys_src == Syssws::IC2 && (ic2_src == this_pll || ic6_src == this_pll || ic11_src == this_pll) {
+            if sys_src == Syssws::Ic2 && (ic2_src == this_pll || ic6_src == this_pll || ic11_src == this_pll) {
                 panic!("PLL should not be disabled / reconfigured if used for IC2, IC6 or IC11 (sysclksrc)")
             }
 
-            *out = init_pll(pll, n, &pll_input);
+            *out = pll.map_or_else(
+                || {
+                    disable_pll(n);
+                    PllOutput::default()
+                },
+                |c| init_pll(Some(c), n, &pll_input),
+            );
         } else if pll.is_some() && !pll_ready {
             RCC.csr().write(|w| w.set_pllons(n, true));
             while !RCC.sr().read().pllrdy(n) {}
@@ -1046,6 +1070,7 @@ fn init_osc(config: Config) -> OscOutput {
 
     OscOutput {
         hsi,
+        hsi_div,
         hse,
         msi,
         lsi,
@@ -1187,35 +1212,35 @@ pub(crate) unsafe fn init(config: Config) {
 
         // SVMCR1: VddIO4
         PWR.svmcr1().modify(|w| {
-            w.set_vddio4sv(Vddio4sv::B_0X1);
+            w.set_vddio4sv(Vddio4sv::B0x1);
         });
         // SVMCR2: VddIO5
         PWR.svmcr2().modify(|w| {
-            w.set_vddio5sv(Vddio5sv::B_0X1);
+            w.set_vddio5sv(Vddio5sv::B0x1);
         });
         // SVMCR3: VddIO2 and VddIO3 (for XSPI1 and XSPI2)
         PWR.svmcr3().modify(|w| {
-            w.set_vddio2sv(Vddio2sv::B_0X1);
+            w.set_vddio2sv(Vddio2sv::B0x1);
             w.set_vddio2vmen(true); // Enable voltage monitoring
-            w.set_vddio3sv(Vddio3sv::B_0X1);
+            w.set_vddio3sv(Vddio3sv::B0x1);
             w.set_vddio3vmen(true); // Enable voltage monitoring
             // Set voltage range based on config
             if config.vddio2_1v8 {
-                w.set_vddio2vrsel(Vddio2vrsel::B_0X1); // 1.8V mode
+                w.set_vddio2vrsel(Vddio2vrsel::B0x1); // 1.8V mode
             }
             if config.vddio3_1v8 {
-                w.set_vddio3vrsel(Vddio3vrsel::B_0X1); // 1.8V mode
+                w.set_vddio3vrsel(Vddio3vrsel::B0x1); // 1.8V mode
             }
         });
 
         // Wait for VddIO domains to be ready
-        while PWR.svmcr3().read().vddio2rdy() != Vddio2rdy::B_0X1 {}
-        while PWR.svmcr3().read().vddio3rdy() != Vddio3rdy::B_0X1 {}
+        while PWR.svmcr3().read().vddio2rdy() != Vddio2rdy::B0x1 {}
+        while PWR.svmcr3().read().vddio3rdy() != Vddio3rdy::B0x1 {}
 
         // Debug VddIO status after configuration
         let svmcr3 = PWR.svmcr3().read();
-        debug!("VddIO2 ready: {}", svmcr3.vddio2rdy() == Vddio2rdy::B_0X1);
-        debug!("VddIO3 ready: {}", svmcr3.vddio3rdy() == Vddio3rdy::B_0X1);
+        debug!("VddIO2 ready: {}", svmcr3.vddio2rdy() == Vddio2rdy::B0x1);
+        debug!("VddIO3 ready: {}", svmcr3.vddio3rdy() == Vddio3rdy::B0x1);
         debug!("SVMCR3 raw = 0x{:08x}", svmcr3.0);
 
         // Configure compensation cells per errata ES0620
@@ -1226,79 +1251,104 @@ pub(crate) unsafe fn init(config: Config) {
         SYSCFG.vddio2cccr().write(|w| {
             w.set_ransrc(0x7);
             w.set_rapsrc(0x8);
-            w.set_en(Vddio2cccrEn::B_0X1);
+            w.set_en(Vddio2cccrEn::B0x1);
         });
         SYSCFG.vddio3cccr().write(|w| {
             w.set_ransrc(0x7);
             w.set_rapsrc(0x8);
-            w.set_en(Vddio3cccrEn::B_0X1);
+            w.set_en(Vddio3cccrEn::B0x1);
         });
         SYSCFG.vddio4cccr().write(|w| {
             w.set_ransrc(0x7);
             w.set_rapsrc(0x8);
-            w.set_en(Vddio4cccrEn::B_0X1);
+            w.set_en(Vddio4cccrEn::B0x1);
         });
     }
 
     let osc = init_osc(config);
+    let ic_freqs = [
+        config.ic1,
+        config.ic2,
+        config.ic3,
+        config.ic4,
+        config.ic5,
+        config.ic6,
+        config.ic7,
+        config.ic8,
+        config.ic9,
+        config.ic10,
+        config.ic11,
+        config.ic12,
+        config.ic13,
+        config.ic14,
+        config.ic15,
+        config.ic16,
+        config.ic17,
+        config.ic18,
+        config.ic19,
+        config.ic20,
+    ]
+    .map(|ic| {
+        let ic_cfg = ic?;
+        let pll_freq = match ic_cfg.source.to_bits() {
+            0 => osc.pll1,
+            1 => osc.pll2,
+            2 => osc.pll3,
+            3 => osc.pll4,
+            _ => None,
+        }?;
+        let divider = (ic_cfg.divider.to_bits() as u32) + 1; // ICINT 0 = divide by 1
+        Some(Hertz(pll_freq.0 / divider))
+    });
     let clock_inputs = ClocksInput {
         hsi: osc.hsi,
+        hsi_div: osc.hsi_div,
         msi: osc.msi,
         hse: osc.hse,
-        pll1: osc.pll1,
-        pll2: osc.pll2,
+        ic1: ic_freqs[0],
+        ic2: ic_freqs[1],
+        ic3: ic_freqs[2],
+        ic4: ic_freqs[3],
+        ic5: ic_freqs[4],
+        ic6: ic_freqs[5],
+        ic7: ic_freqs[6],
+        ic8: ic_freqs[7],
+        ic9: ic_freqs[8],
+        ic10: ic_freqs[9],
+        ic11: ic_freqs[10],
+        ic12: ic_freqs[11],
+        ic13: ic_freqs[12],
+        ic14: ic_freqs[13],
+        ic15: ic_freqs[14],
+        ic16: ic_freqs[15],
+        ic17: ic_freqs[16],
+        ic18: ic_freqs[17],
+        ic19: ic_freqs[18],
+        ic20: ic_freqs[19],
     };
     let clocks = init_clocks(config, &clock_inputs);
 
-    // Calculate IC3 clock frequency (XSPI1 kernel clock)
-    let ic3_freq = config
-        .ic3
-        .map(|ic_cfg| {
-            let pll_freq = match ic_cfg.source.to_bits() {
-                0 => osc.pll1,
-                1 => osc.pll2,
-                2 => osc.pll3,
-                3 => osc.pll4,
-                _ => None,
-            };
-            pll_freq.map(|freq| {
-                let divider = (ic_cfg.divider.to_bits() as u32) + 1; // ICINT 0 = divide by 1
-                Hertz(freq.0 / divider)
-            })
-        })
-        .flatten();
-
-    // Calculate IC4 clock frequency (XSPI2 kernel clock)
-    let ic4_freq = config
-        .ic4
-        .map(|ic_cfg| {
-            let pll_freq = match ic_cfg.source.to_bits() {
-                0 => osc.pll1,
-                1 => osc.pll2,
-                2 => osc.pll3,
-                3 => osc.pll4,
-                _ => None,
-            };
-            pll_freq.map(|freq| {
-                let divider = (ic_cfg.divider.to_bits() as u32) + 1; // ICINT 0 = divide by 1
-                Hertz(freq.0 / divider)
-            })
-        })
-        .flatten();
-
     // TODO: sysb, sysc, sysd must have the same clock source
+
+    config.mux.init();
 
     set_clocks!(
         sys: Some(clocks.sysclk),
-        hsi: osc.hsi,
-        hsi_div: None,
-        hse: osc.hse,
-        msi: osc.msi,
+        hsi: clock_inputs.hsi,
+        hsi_div: clock_inputs.hsi_div,
+        hse: clock_inputs.hse,
+        msi: clock_inputs.msi,
+        lse: None,
         hclk1: Some(clocks.ahb),
         hclk2: Some(clocks.ahb),
         hclk3: Some(clocks.ahb),
         hclk4: Some(clocks.ahb),
         hclk5: Some(clocks.ahb),
+        // hclku is the USB / SDMMC kernel-clock option in RM0486 Table 72. It
+        // shares the same max frequency (200 MHz) as hclk1..5 and has no
+        // dedicated prescaler in `RCC_*` — derived from sys through the
+        // common AHB prescaler.
+        hclku: Some(clocks.ahb),
         pclk1: Some(clocks.apb1),
         pclk2: Some(clocks.apb2),
         pclk1_tim: Some(clocks.pclk_tim),
@@ -1308,14 +1358,25 @@ pub(crate) unsafe fn init(config: Config) {
         per: None,
         rtc: None,
         i2s_ckin: None,
-        ic3: ic3_freq,
-        ic4: ic4_freq,
-        ic8: None,
-        ic9: None,
-        ic10: None,
-        ic14: None,
-        ic15: None,
-        ic17: None,
-        ic20: None,
+        ic1: clock_inputs.ic1,
+        ic2: clock_inputs.ic2,
+        ic3: clock_inputs.ic3,
+        ic4: clock_inputs.ic4,
+        ic5: clock_inputs.ic5,
+        ic6: clock_inputs.ic6,
+        ic7: clock_inputs.ic7,
+        ic8: clock_inputs.ic8,
+        ic9: clock_inputs.ic9,
+        ic10: clock_inputs.ic10,
+        ic11: clock_inputs.ic11,
+        ic12: clock_inputs.ic12,
+        ic13: clock_inputs.ic13,
+        ic14: clock_inputs.ic14,
+        ic15: clock_inputs.ic15,
+        ic16: clock_inputs.ic16,
+        ic17: clock_inputs.ic17,
+        ic18: clock_inputs.ic18,
+        ic19: clock_inputs.ic19,
+        ic20: clock_inputs.ic20,
     );
 }

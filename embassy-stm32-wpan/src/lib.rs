@@ -18,11 +18,17 @@
 // #![warn(missing_docs)]
 #![allow(static_mut_refs)] // TODO: Fix
 
-#[cfg(feature = "wb55")]
-mod wb55;
+// This mod MUST go first, so that the others see its macros.
+pub(crate) mod fmt;
 
-#[cfg(feature = "wb55")]
-pub use wb55::*;
+#[cfg(feature = "wba")]
+pub mod bluetooth;
+
+#[cfg(feature = "wb")]
+mod wb;
+
+#[cfg(feature = "wb")]
+pub use wb::*;
 
 #[cfg(feature = "wba")]
 mod wba;

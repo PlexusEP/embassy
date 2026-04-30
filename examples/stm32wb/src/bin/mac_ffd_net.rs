@@ -41,7 +41,7 @@ async fn run_net(mut runner: embassy_net::Runner<'static, Driver<'static>>) -> !
     runner.run().await
 }
 
-#[embassy_executor::main(executor = "embassy_stm32::Executor", entry = "cortex_m_rt::entry")]
+#[embassy_executor::main(executor = "embassy_stm32::executor::Executor", entry = "cortex_m_rt::entry")]
 async fn main(spawner: Spawner) {
     /*
         How to make this work:
@@ -72,18 +72,20 @@ async fn main(spawner: Spawner) {
     info!("Hello World!");
 
     let config = Config::default();
-    let mut mbox = TlMbox::init(p.IPCC, Irqs, config).await;
+    let (mac, mm) = TlMbox::wait_ready(p.IPCC, Irqs, config)
+        .await
+        .unwrap()
+        .init_mac()
+        .await
+        .unwrap();
 
-    spawner.spawn(run_mm_queue(mbox.mm_subsystem).unwrap());
-
-    let result = mbox.sys_subsystem.shci_c2_mac_802_15_4_init().await;
-    info!("initialized mac: {}", result);
+    spawner.spawn(run_mm_queue(mm).unwrap());
 
     static DRIVER_STATE: StaticCell<DriverState> = StaticCell::new();
     static RUNNER: StaticCell<Runner> = StaticCell::new();
     static RESOURCES: StaticCell<StackResources<3>> = StaticCell::new();
 
-    let driver_state = DRIVER_STATE.init(DriverState::new(mbox.mac_subsystem));
+    let driver_state = DRIVER_STATE.init(DriverState::new(mac));
 
     let (driver, mac_runner, mut control) = Driver::new(
         driver_state,

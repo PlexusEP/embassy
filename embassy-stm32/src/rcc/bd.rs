@@ -4,10 +4,10 @@ use core::sync::atomic::{Ordering, compiler_fence};
 #[cfg(not(stm32n6))]
 use crate::pac::common::{RW, Reg};
 // For the H7, the Retention features live in the pwr registers
-#[cfg(all(backup_sram, not(stm32h7)))]
-use crate::pac::rcc::vals::Retention;
 #[cfg(all(stm32h7, backup_sram))]
 use crate::pac::pwr::vals::Retention;
+#[cfg(all(backup_sram, not(stm32h7)))]
+use crate::pac::rcc::vals::Retention;
 pub use crate::pac::rcc::vals::Rtcsel as RtcClockSource;
 use crate::time::Hertz;
 
@@ -221,9 +221,13 @@ impl LsConfig {
         #[cfg(backup_sram)]
         {
             #[cfg(stm32h7)]
-            unsafe { super::BKSRAM_RETAINED = crate::pac::PWR.cr2().read().bren() == Retention::Preserved };
+            unsafe {
+                super::BKSRAM_RETAINED = crate::pac::PWR.cr2().read().bren() == Retention::Preserved
+            };
             #[cfg(not(stm32h7))]
-            unsafe { super::BKSRAM_RETAINED = crate::pac::PWR.bdcr().read().bren() == Retention::Preserved };
+            unsafe {
+                super::BKSRAM_RETAINED = crate::pac::PWR.bdcr().read().bren() == Retention::Preserved
+            };
 
             // H7 has an additional backup SRAM enable bit that must be set in the RCC registers
             #[cfg(stm32h7)]

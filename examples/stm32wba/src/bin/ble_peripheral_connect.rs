@@ -21,22 +21,33 @@ use core::cell::RefCell;
 
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_stm32::peripherals::RNG;
+use embassy_stm32::aes::{self, Aes};
+use embassy_stm32::mode::Blocking;
+use embassy_stm32::peripherals::{AES as AesPeriph, PKA as PkaPeriph, RNG};
+use embassy_stm32::pka::{self, Pka};
 use embassy_stm32::rcc::{
-    AHB5Prescaler, AHBPrescaler, APBPrescaler, PllDiv, PllMul, PllPreDiv, PllSource, Sysclk, VoltageScale, mux,
+    AHB5Prescaler, AHBPrescaler, APBPrescaler, Hse, HsePrescaler, LsConfig, LseConfig, LseDrive, LseMode, PllDiv,
+    PllMul, PllPreDiv, PllSource, RtcClockSource, Sysclk, VoltageScale, mux,
 };
 use embassy_stm32::rng::{self, Rng};
+use embassy_stm32::time::Hertz;
 use embassy_stm32::{Config, bind_interrupts};
-use embassy_stm32_wpan::gap::{AdvData, AdvParams, AdvType, GapEvent};
-use embassy_stm32_wpan::gatt::{CharProperties, GattEventMask, GattServer, SecurityPermissions, ServiceType, Uuid};
-use embassy_stm32_wpan::{Ble, ble_runner};
+use embassy_stm32_wpan::bluetooth::HCI;
+use embassy_stm32_wpan::bluetooth::gap::{AdvData, AdvParams, AdvType, GapEvent};
+use embassy_stm32_wpan::bluetooth::gatt::{CharProperties, GattEventMask, SecurityPermissions, ServiceType, Uuid};
+use embassy_stm32_wpan::{HighInterruptHandler, LowInterruptHandler, ble_runner, new_controller_state};
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use static_cell::StaticCell;
+use stm32wb_hci::event::ConnectionRole;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
     RNG => rng::InterruptHandler<embassy_stm32::peripherals::RNG>;
+    AES => aes::InterruptHandler<AesPeriph>;
+    PKA => pka::InterruptHandler<PkaPeriph>;
+    RADIO => HighInterruptHandler;
+    HASH => LowInterruptHandler;
 });
 
 /// BLE runner task - drives the BLE stack sequencer
@@ -49,45 +60,79 @@ async fn ble_runner_task() {
 async fn main(spawner: Spawner) {
     let mut config = Config::default();
 
+    // Enable HSE (32 MHz external crystal) - REQUIRED for BLE radio
+    config.rcc.hse = Some(Hse {
+        prescaler: HsePrescaler::Div1,
+    });
+
+    // Enable LSE (32.768 kHz external crystal) - REQUIRED for BLE radio sleep timer
+    config.rcc.ls = LsConfig {
+        rtc: RtcClockSource::Lse,
+        lsi: false,
+        lse: Some(LseConfig {
+            frequency: Hertz(32_768),
+            mode: LseMode::Oscillator(LseDrive::MediumLow),
+            peripherals_clocked: true,
+        }),
+    };
+
     // Configure PLL1 (required on WBA)
     config.rcc.pll1 = Some(embassy_stm32::rcc::Pll {
-        source: PllSource::HSI,
-        prediv: PllPreDiv::DIV1,
-        mul: PllMul::MUL30,
-        divr: Some(PllDiv::DIV5),
+        source: PllSource::Hsi,
+        prediv: PllPreDiv::Div1,
+        mul: PllMul::Mul30,
+        divr: Some(PllDiv::Div5),
         divq: None,
-        divp: Some(PllDiv::DIV30),
+        divp: Some(PllDiv::Div30),
         frac: Some(0),
     });
 
-    config.rcc.ahb_pre = AHBPrescaler::DIV1;
-    config.rcc.apb1_pre = APBPrescaler::DIV1;
-    config.rcc.apb2_pre = APBPrescaler::DIV1;
-    config.rcc.apb7_pre = APBPrescaler::DIV1;
-    config.rcc.ahb5_pre = AHB5Prescaler::DIV4;
-    config.rcc.voltage_scale = VoltageScale::RANGE1;
-    config.rcc.sys = Sysclk::PLL1_R;
-    config.rcc.mux.rngsel = mux::Rngsel::HSI;
+    config.rcc.ahb_pre = AHBPrescaler::Div1;
+    config.rcc.apb1_pre = APBPrescaler::Div1;
+    config.rcc.apb2_pre = APBPrescaler::Div1;
+    config.rcc.apb7_pre = APBPrescaler::Div1;
+    config.rcc.ahb5_pre = AHB5Prescaler::Div4;
+    config.rcc.voltage_scale = VoltageScale::Range1;
+    config.rcc.sys = Sysclk::Pll1R;
+    config.rcc.mux.rngsel = mux::Rngsel::Hsi;
 
     let p = embassy_stm32::init(config);
+
+    // Configure radio sleep timer to use LSE
+    {
+        use embassy_stm32::pac::RCC;
+        use embassy_stm32::pac::rcc::vals::Radiostsel;
+        RCC.bdcr().modify(|w| w.set_radiostsel(Radiostsel::Lse));
+    }
+
     info!("Embassy STM32WBA BLE Peripheral Connection Example");
 
-    // Initialize RNG (required by BLE stack)
-    static RNG: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<Rng<'static, RNG>>>> = StaticCell::new();
-    let rng = RNG.init(Mutex::new(RefCell::new(Rng::new(p.RNG, Irqs))));
-    info!("RNG initialized");
+    // Initialize hardware peripherals required by BLE stack
+    static RNG_INST: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<Rng<'static, RNG>>>> = StaticCell::new();
+    let rng = RNG_INST.init(Mutex::new(RefCell::new(Rng::new(p.RNG, Irqs))));
 
-    // Initialize BLE stack
-    let mut ble = Ble::new(rng);
-    ble.init().expect("BLE initialization failed");
-    info!("BLE stack initialized");
+    static AES_INST: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<Aes<'static, AesPeriph, Blocking>>>> =
+        StaticCell::new();
+    let aes = AES_INST.init(Mutex::new(RefCell::new(Aes::new_blocking(p.AES, Irqs))));
+
+    static PKA_INST: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<Pka<'static, PkaPeriph>>>> = StaticCell::new();
+    let pka = PKA_INST.init(Mutex::new(RefCell::new(Pka::new_blocking(p.PKA, Irqs))));
+
+    info!("Hardware peripherals initialized (RNG, AES, PKA)");
 
     // Spawn the BLE runner task (required for proper BLE operation)
-    spawner.spawn(ble_runner_task().expect("Failed to create BLE runner task"));
+    spawner.spawn(ble_runner_task().expect("Failed to spawn BLE runner"));
+
+    // Initialize BLE stack
+    // Initialize BLE stack
+    let mut ble = HCI::new(new_controller_state!(8), rng, aes, pka, Irqs)
+        .await
+        .expect("BLE initialization failed");
+
+    info!("BLE stack initialized");
 
     // Initialize GATT server with a simple service
-    let mut gatt = GattServer::new();
-    gatt.init().expect("GATT initialization failed");
+    let mut gatt = ble.gatt_server();
 
     // Create a simple service for demonstration
     let service_uuid = Uuid::from_u16(0x180F); // Battery Service UUID
@@ -134,9 +179,8 @@ async fn main(spawner: Spawner) {
 
     // Start advertising
     {
-        let mut advertiser = ble.advertiser();
-        advertiser
-            .start(adv_params.clone(), adv_data.clone(), None)
+        ble.start_advertising(adv_params.clone(), adv_data.clone(), None)
+            .await
             .expect("Failed to start advertising");
     }
 
@@ -156,30 +200,14 @@ async fn main(spawner: Spawner) {
                     info!(
                         "  Role: {}",
                         match conn.role {
-                            embassy_stm32_wpan::gap::ConnectionRole::Central => "Central",
-                            embassy_stm32_wpan::gap::ConnectionRole::Peripheral => "Peripheral",
+                            ConnectionRole::Central => "Central",
+                            ConnectionRole::Peripheral => "Peripheral",
                         }
                     );
-                    info!(
-                        "  Peer Address: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
-                        conn.peer_address.0[5],
-                        conn.peer_address.0[4],
-                        conn.peer_address.0[3],
-                        conn.peer_address.0[2],
-                        conn.peer_address.0[1],
-                        conn.peer_address.0[0]
-                    );
-                    info!(
-                        "  Interval: {} ({}ms)",
-                        conn.params.interval,
-                        (conn.params.interval as u32 * 125) / 100
-                    );
-                    info!("  Latency: {}", conn.params.latency);
-                    info!(
-                        "  Timeout: {} ({}ms)",
-                        conn.params.supervision_timeout,
-                        conn.params.supervision_timeout as u32 * 10
-                    );
+                    info!("  Peer Address: {}", conn.peer_address);
+                    info!("  Interval: {} ", conn.interval.interval());
+                    info!("  Latency: {}", conn.interval.conn_latency());
+                    info!("  Timeout: {}", conn.interval.supervision_timeout());
                     info!("  Active connections: {}", ble.connections().count());
 
                     // Note: Advertising typically stops automatically on connection
@@ -192,31 +220,21 @@ async fn main(spawner: Spawner) {
                     info!("  Reason: 0x{:02X} ({})", reason, disconnect_reason_str(reason));
                     info!("  Active connections: {}", ble.connections().count());
 
-                    // Restart advertising after disconnection
+                    // Restart advertising after disconnection.
+                    // Advertising parameters are still configured, just re-enable.
                     info!("Restarting advertising...");
-                    let mut advertiser = ble.advertiser();
-                    if let Err(e) = advertiser.start(adv_params.clone(), adv_data.clone(), None) {
-                        error!("Failed to restart advertising: {:?}", e);
-                    } else {
-                        info!("Advertising restarted");
+                    match ble.start_advertising(adv_params.clone(), adv_data.clone(), None).await {
+                        Ok(()) => info!("Advertising restarted"),
+                        Err(e) => error!("Failed to restart advertising: {:?}", e),
                     }
                 }
 
-                GapEvent::ConnectionParamsUpdated {
-                    handle,
-                    interval,
-                    latency,
-                    supervision_timeout,
-                } => {
+                GapEvent::ConnectionParamsUpdated { handle, interval } => {
                     info!("=== CONNECTION PARAMS UPDATED ===");
                     info!("  Handle: 0x{:04X}", handle.0);
-                    info!("  New Interval: {} ({}ms)", interval, (interval as u32 * 125) / 100);
-                    info!("  New Latency: {}", latency);
-                    info!(
-                        "  New Timeout: {} ({}ms)",
-                        supervision_timeout,
-                        supervision_timeout as u32 * 10
-                    );
+                    info!("  New Interval: {}", interval.interval());
+                    info!("  New Latency: {}", interval.conn_latency());
+                    info!("  New Timeout: {}", interval.supervision_timeout());
                 }
 
                 GapEvent::PhyUpdated { handle, tx_phy, rx_phy } => {

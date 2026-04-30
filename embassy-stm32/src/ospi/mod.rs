@@ -13,7 +13,7 @@ pub use enums::*;
 use stm32_metapac::octospi::vals::{PhaseMode, SizeInBits};
 
 use crate::dma::{ChannelAndRequest, word};
-use crate::gpio::{AfType, AnyPin, OutputType, Pull, SealedPin as _, Speed};
+use crate::gpio::{AfType, Flex, OutputType, Pull, Speed};
 use crate::mode::{Async, Blocking, Mode as PeriMode};
 use crate::pac::octospi::{Octospi as Regs, vals};
 #[cfg(octospim_v1)]
@@ -175,17 +175,17 @@ pub enum OspiError {
 /// OSPI driver.
 pub struct Ospi<'d, T: Instance, M: PeriMode> {
     _peri: Peri<'d, T>,
-    sck: Option<Peri<'d, AnyPin>>,
-    d0: Option<Peri<'d, AnyPin>>,
-    d1: Option<Peri<'d, AnyPin>>,
-    d2: Option<Peri<'d, AnyPin>>,
-    d3: Option<Peri<'d, AnyPin>>,
-    d4: Option<Peri<'d, AnyPin>>,
-    d5: Option<Peri<'d, AnyPin>>,
-    d6: Option<Peri<'d, AnyPin>>,
-    d7: Option<Peri<'d, AnyPin>>,
-    nss: Option<Peri<'d, AnyPin>>,
-    dqs: Option<Peri<'d, AnyPin>>,
+    _sck: Option<Flex<'d>>,
+    _d0: Option<Flex<'d>>,
+    _d1: Option<Flex<'d>>,
+    _d2: Option<Flex<'d>>,
+    _d3: Option<Flex<'d>>,
+    _d4: Option<Flex<'d>>,
+    _d5: Option<Flex<'d>>,
+    _d6: Option<Flex<'d>>,
+    _d7: Option<Flex<'d>>,
+    _nss: Option<Flex<'d>>,
+    _dqs: Option<Flex<'d>>,
     dma: Option<ChannelAndRequest<'d>>,
     _phantom: PhantomData<M>,
     config: Config,
@@ -233,7 +233,7 @@ impl<'d, T: Instance, M: PeriMode> Ospi<'d, T, M> {
 
         // Enable memory mapped mode
         reg.cr().modify(|r| {
-            r.set_fmode(crate::ospi::vals::FunctionalMode::MEMORY_MAPPED);
+            r.set_fmode(crate::ospi::vals::FunctionalMode::MemoryMapped);
             r.set_tcen(false);
         });
         Ok(())
@@ -244,7 +244,7 @@ impl<'d, T: Instance, M: PeriMode> Ospi<'d, T, M> {
         let reg = T::REGS;
 
         reg.cr().modify(|r| {
-            r.set_fmode(crate::ospi::vals::FunctionalMode::INDIRECT_WRITE);
+            r.set_fmode(crate::ospi::vals::FunctionalMode::IndirectWrite);
             r.set_abort(true);
             r.set_dmaen(false);
             r.set_en(false);
@@ -261,17 +261,17 @@ impl<'d, T: Instance, M: PeriMode> Ospi<'d, T, M> {
 
     fn new_inner(
         peri: Peri<'d, T>,
-        d0: Option<Peri<'d, AnyPin>>,
-        d1: Option<Peri<'d, AnyPin>>,
-        d2: Option<Peri<'d, AnyPin>>,
-        d3: Option<Peri<'d, AnyPin>>,
-        d4: Option<Peri<'d, AnyPin>>,
-        d5: Option<Peri<'d, AnyPin>>,
-        d6: Option<Peri<'d, AnyPin>>,
-        d7: Option<Peri<'d, AnyPin>>,
-        sck: Option<Peri<'d, AnyPin>>,
-        nss: Option<Peri<'d, AnyPin>>,
-        dqs: Option<Peri<'d, AnyPin>>,
+        d0: Option<Flex<'d>>,
+        d1: Option<Flex<'d>>,
+        d2: Option<Flex<'d>>,
+        d3: Option<Flex<'d>>,
+        d4: Option<Flex<'d>>,
+        d5: Option<Flex<'d>>,
+        d6: Option<Flex<'d>>,
+        d7: Option<Flex<'d>>,
+        sck: Option<Flex<'d>>,
+        nss: Option<Flex<'d>>,
+        dqs: Option<Flex<'d>>,
         dma: Option<ChannelAndRequest<'d>>,
         config: Config,
         width: OspiWidth,
@@ -401,8 +401,8 @@ impl<'d, T: Instance, M: PeriMode> Ospi<'d, T, M> {
 
         T::REGS.tcr().modify(|w| {
             w.set_sshift(match config.sample_shifting {
-                true => vals::SampleShift::HALF_CYCLE,
-                false => vals::SampleShift::NONE,
+                true => vals::SampleShift::HalfCycle,
+                false => vals::SampleShift::None,
             });
             w.set_dhqc(config.delay_hold_quarter_cycle);
         });
@@ -421,17 +421,17 @@ impl<'d, T: Instance, M: PeriMode> Ospi<'d, T, M> {
 
         Self {
             _peri: peri,
-            sck,
-            d0,
-            d1,
-            d2,
-            d3,
-            d4,
-            d5,
-            d6,
-            d7,
-            nss,
-            dqs,
+            _sck: sck,
+            _d0: d0,
+            _d1: d1,
+            _d2: d2,
+            _d3: d3,
+            _d4: d4,
+            _d5: d5,
+            _d6: d6,
+            _d7: d7,
+            _nss: nss,
+            _dqs: dqs,
             dma,
             _phantom: PhantomData,
             config,
@@ -451,7 +451,7 @@ impl<'d, T: Instance, M: PeriMode> Ospi<'d, T, M> {
         }
 
         T::REGS.cr().modify(|w| {
-            w.set_fmode(vals::FunctionalMode::INDIRECT_WRITE);
+            w.set_fmode(vals::FunctionalMode::IndirectWrite);
         });
 
         // Configure alternate bytes
@@ -584,10 +584,8 @@ impl<'d, T: Instance, M: PeriMode> Ospi<'d, T, M> {
         let current_instruction = T::REGS.ir().read().instruction();
 
         // For a indirect read transaction, the transaction begins when the instruction/address is set
-        T::REGS
-            .cr()
-            .modify(|v| v.set_fmode(vals::FunctionalMode::INDIRECT_READ));
-        if T::REGS.ccr().read().admode() == vals::PhaseMode::NONE {
+        T::REGS.cr().modify(|v| v.set_fmode(vals::FunctionalMode::IndirectRead));
+        if T::REGS.ccr().read().admode() == vals::PhaseMode::None {
             T::REGS.ir().write(|v| v.set_instruction(current_instruction));
         } else {
             T::REGS.ar().write(|v| v.set_address(current_address));
@@ -622,7 +620,7 @@ impl<'d, T: Instance, M: PeriMode> Ospi<'d, T, M> {
 
         T::REGS
             .cr()
-            .modify(|v| v.set_fmode(vals::FunctionalMode::INDIRECT_WRITE));
+            .modify(|v| v.set_fmode(vals::FunctionalMode::IndirectWrite));
 
         for idx in 0..buf.len() {
             while !T::REGS.sr().read().ftf() {}
@@ -684,8 +682,8 @@ impl<'d, T: Instance, M: PeriMode> Ospi<'d, T, M> {
 
         T::REGS.tcr().modify(|w| {
             w.set_sshift(match config.sample_shifting {
-                true => vals::SampleShift::HALF_CYCLE,
-                false => vals::SampleShift::NONE,
+                true => vals::SampleShift::HalfCycle,
+                false => vals::SampleShift::None,
             });
             w.set_dhqc(config.delay_hold_quarter_cycle);
         });
@@ -1168,10 +1166,8 @@ impl<'d, T: Instance> Ospi<'d, T, Async> {
         let current_instruction = T::REGS.ir().read().instruction();
 
         // For a indirect read transaction, the transaction begins when the instruction/address is set
-        T::REGS
-            .cr()
-            .modify(|v| v.set_fmode(vals::FunctionalMode::INDIRECT_READ));
-        if T::REGS.ccr().read().admode() == vals::PhaseMode::NONE {
+        T::REGS.cr().modify(|v| v.set_fmode(vals::FunctionalMode::IndirectRead));
+        if T::REGS.ccr().read().admode() == vals::PhaseMode::None {
             T::REGS.ir().write(|v| v.set_instruction(current_instruction));
         } else {
             T::REGS.ar().write(|v| v.set_address(current_address));
@@ -1208,7 +1204,7 @@ impl<'d, T: Instance> Ospi<'d, T, Async> {
         self.configure_command(&transaction, Some(transfer_size_bytes))?;
         T::REGS
             .cr()
-            .modify(|v| v.set_fmode(vals::FunctionalMode::INDIRECT_WRITE));
+            .modify(|v| v.set_fmode(vals::FunctionalMode::IndirectWrite));
 
         // TODO: implement this using a LinkedList DMA to offload the whole transfer off the CPU.
         for chunk in buf.chunks(0xFFFF / W::size().bytes()) {
@@ -1245,10 +1241,8 @@ impl<'d, T: Instance> Ospi<'d, T, Async> {
         let current_instruction = T::REGS.ir().read().instruction();
 
         // For a indirect read transaction, the transaction begins when the instruction/address is set
-        T::REGS
-            .cr()
-            .modify(|v| v.set_fmode(vals::FunctionalMode::INDIRECT_READ));
-        if T::REGS.ccr().read().admode() == vals::PhaseMode::NONE {
+        T::REGS.cr().modify(|v| v.set_fmode(vals::FunctionalMode::IndirectRead));
+        if T::REGS.ccr().read().admode() == vals::PhaseMode::None {
             T::REGS.ir().write(|v| v.set_instruction(current_instruction));
         } else {
             T::REGS.ar().write(|v| v.set_address(current_address));
@@ -1285,7 +1279,7 @@ impl<'d, T: Instance> Ospi<'d, T, Async> {
         self.configure_command(&transaction, Some(transfer_size_bytes))?;
         T::REGS
             .cr()
-            .modify(|v| v.set_fmode(vals::FunctionalMode::INDIRECT_WRITE));
+            .modify(|v| v.set_fmode(vals::FunctionalMode::IndirectWrite));
 
         // TODO: implement this using a LinkedList DMA to offload the whole transfer off the CPU.
         for chunk in buf.chunks(0xFFFF / W::size().bytes()) {
@@ -1309,18 +1303,6 @@ impl<'d, T: Instance> Ospi<'d, T, Async> {
 
 impl<'d, T: Instance, M: PeriMode> Drop for Ospi<'d, T, M> {
     fn drop(&mut self) {
-        self.sck.as_ref().map(|x| x.set_as_disconnected());
-        self.d0.as_ref().map(|x| x.set_as_disconnected());
-        self.d1.as_ref().map(|x| x.set_as_disconnected());
-        self.d2.as_ref().map(|x| x.set_as_disconnected());
-        self.d3.as_ref().map(|x| x.set_as_disconnected());
-        self.d4.as_ref().map(|x| x.set_as_disconnected());
-        self.d5.as_ref().map(|x| x.set_as_disconnected());
-        self.d6.as_ref().map(|x| x.set_as_disconnected());
-        self.d7.as_ref().map(|x| x.set_as_disconnected());
-        self.nss.as_ref().map(|x| x.set_as_disconnected());
-        self.dqs.as_ref().map(|x| x.set_as_disconnected());
-
         rcc::disable::<T>();
     }
 }

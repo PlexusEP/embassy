@@ -439,7 +439,7 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
             self.tx_dma
                 .as_mut()
                 .unwrap()
-                .write(buffer, self.inner.regs().dr().as_ptr() as *mut _, T::TX_DREQ)
+                .write(buffer, self.inner.regs().dr().as_ptr() as *mut _, T::TX_DREQ, false)
         };
         tx_transfer.await;
 
@@ -466,13 +466,13 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
             self.rx_dma
                 .as_mut()
                 .unwrap()
-                .read(self.inner.regs().dr().as_ptr() as *const _, buffer, T::RX_DREQ)
+                .read(self.inner.regs().dr().as_ptr() as *const _, buffer, T::RX_DREQ, false)
         };
 
         let tx_transfer = unsafe {
             // If we don't assign future to a variable, the data register pointer
             // is held across an await and makes the future non-Send.
-            self.tx_dma.as_mut().unwrap().write_repeated(
+            self.tx_dma.as_mut().unwrap().write_zeros(
                 buffer.len(),
                 self.inner.regs().dr().as_ptr() as *mut u8,
                 T::TX_DREQ,
@@ -501,7 +501,7 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
             self.rx_dma
                 .as_mut()
                 .unwrap()
-                .read(self.inner.regs().dr().as_ptr() as *const _, rx, T::RX_DREQ)
+                .read(self.inner.regs().dr().as_ptr() as *const _, rx, T::RX_DREQ, false)
         };
 
         let tx_ch = self.tx_dma.as_mut().unwrap();
@@ -510,14 +510,14 @@ impl<'d, T: Instance> Spi<'d, T, Async> {
         let tx_transfer = async {
             let p = self.inner.regs();
             unsafe {
-                tx_ch.write(tx, p.dr().as_ptr() as *mut _, T::TX_DREQ).await;
+                tx_ch.write(tx, p.dr().as_ptr() as *mut _, T::TX_DREQ, false).await;
 
                 if rx.len() > tx.len() {
                     let write_bytes_len = rx.len() - tx.len();
                     // write dummy data
                     // this will disable incrementation of the buffers
                     tx_ch
-                        .write_repeated(write_bytes_len, p.dr().as_ptr() as *mut u8, T::TX_DREQ)
+                        .write_zeros(write_bytes_len, p.dr().as_ptr() as *mut u8, T::TX_DREQ)
                         .await
                 }
             }
@@ -575,14 +575,14 @@ macro_rules! impl_instance {
 impl_instance!(
     SPI0,
     Spi0,
-    pac::dma::vals::TreqSel::SPI0_TX,
-    pac::dma::vals::TreqSel::SPI0_RX
+    pac::dma::vals::TreqSel::Spi0Tx,
+    pac::dma::vals::TreqSel::Spi0Rx
 );
 impl_instance!(
     SPI1,
     Spi1,
-    pac::dma::vals::TreqSel::SPI1_TX,
-    pac::dma::vals::TreqSel::SPI1_RX
+    pac::dma::vals::TreqSel::Spi1Tx,
+    pac::dma::vals::TreqSel::Spi1Rx
 );
 
 /// CLK pin.

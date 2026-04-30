@@ -271,6 +271,7 @@ impl<'d> UartTx<'d, Async> {
                 buffer,
                 self.info.regs.uartdr().as_ptr() as *mut _,
                 self.info.tx_dreq.into(),
+                false,
             )
         };
         transfer.await;
@@ -455,6 +456,7 @@ impl<'d> UartRx<'d, Async> {
                 self.info.regs.uartdr().as_ptr() as *const _,
                 buffer,
                 self.info.rx_dreq.into(),
+                false,
             )
         };
 
@@ -622,6 +624,7 @@ impl<'d> UartRx<'d, Async> {
                     self.info.regs.uartdr().as_ptr() as *const _,
                     sbuffer,
                     self.info.rx_dreq.into(),
+                    false,
                 )
             };
 
@@ -676,7 +679,7 @@ impl<'d> UartRx<'d, Async> {
                 let eval = sval + buffer.len();
 
                 // This is the address where the DMA would write to next
-                let next_addr = self.rx_dma.as_mut().unwrap().regs().write_addr().read() as usize;
+                let next_addr = self.rx_dma.as_mut().unwrap().write_addr() as usize;
 
                 // If we DON'T end up inside the range, something has gone really wrong.
                 // Note that it's okay that `eval` is one past the end of the slice, as
@@ -901,9 +904,9 @@ impl<'d, M: Mode> Uart<'d, M> {
             pin.gpio().ctrl().write(|w| {
                 w.set_funcsel(funcsel);
                 w.set_outover(if config.invert_tx {
-                    Outover::INVERT
+                    Outover::Invert
                 } else {
-                    Outover::NORMAL
+                    Outover::Normal
                 });
             });
             pin.pad_ctrl().write(|w| {
@@ -920,9 +923,9 @@ impl<'d, M: Mode> Uart<'d, M> {
             pin.gpio().ctrl().write(|w| {
                 w.set_funcsel(funcsel);
                 w.set_inover(if config.invert_rx {
-                    Inover::INVERT
+                    Inover::Invert
                 } else {
-                    Inover::NORMAL
+                    Inover::Normal
                 });
             });
             pin.pad_ctrl().write(|w| {
@@ -935,9 +938,9 @@ impl<'d, M: Mode> Uart<'d, M> {
             pin.gpio().ctrl().write(|w| {
                 w.set_funcsel(2);
                 w.set_inover(if config.invert_cts {
-                    Inover::INVERT
+                    Inover::Invert
                 } else {
-                    Inover::NORMAL
+                    Inover::Normal
                 });
             });
             pin.pad_ctrl().write(|w| {
@@ -950,9 +953,9 @@ impl<'d, M: Mode> Uart<'d, M> {
             pin.gpio().ctrl().write(|w| {
                 w.set_funcsel(2);
                 w.set_outover(if config.invert_rts {
-                    Outover::INVERT
+                    Outover::Invert
                 } else {
-                    Outover::NORMAL
+                    Outover::Normal
                 });
             });
             pin.pad_ctrl().write(|w| {
@@ -1035,11 +1038,14 @@ impl<'d, M: Mode> Uart<'d, M> {
             embedded_hal_1::delay::DelayNs::delay_us(&mut Delay, wait_time_us);
         }
 
-        let res = r.uartlcr_h().modify(f);
+        let mut res: Option<R> = None;
+        r.uartlcr_h().modify(|w| {
+            res = Some(f(w));
+        });
 
         r.uartcr().write_value(cr);
 
-        res
+        res.unwrap()
     }
 
     /// sets baudrate on runtime
@@ -1410,14 +1416,14 @@ macro_rules! impl_instance {
 impl_instance!(
     UART0,
     UART0_IRQ,
-    pac::dma::vals::TreqSel::UART0_TX,
-    pac::dma::vals::TreqSel::UART0_RX
+    pac::dma::vals::TreqSel::Uart0Tx,
+    pac::dma::vals::TreqSel::Uart0Rx
 );
 impl_instance!(
     UART1,
     UART1_IRQ,
-    pac::dma::vals::TreqSel::UART1_TX,
-    pac::dma::vals::TreqSel::UART1_RX
+    pac::dma::vals::TreqSel::Uart1Tx,
+    pac::dma::vals::TreqSel::Uart1Rx
 );
 
 /// Trait for TX pins.

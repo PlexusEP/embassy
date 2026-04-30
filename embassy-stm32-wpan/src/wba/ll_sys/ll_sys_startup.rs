@@ -1,19 +1,19 @@
-#[cfg(feature = "wba_ble")]
-use crate::bindings::ble::{BleStack_Init, BleStack_init_t, tBleStatus};
-use crate::bindings::link_layer::{
+#[cfg(feature = "wba-ble")]
+use crate::wba::bindings::ble::{BleStack_Init, BleStack_init_t, tBleStatus};
+use crate::wba::bindings::link_layer::{
     LL_SYS_STATUS_T_LL_SYS_OK, ll_sys_assert, ll_sys_bg_process_init, ll_sys_config_params, ll_sys_dp_slp_init,
     ll_sys_status_t,
 };
-#[cfg(feature = "wba_ble")]
-use crate::bindings::link_layer::{
+#[cfg(feature = "wba-ble")]
+use crate::wba::bindings::link_layer::{
     ble_buff_hdr_p, hci_dispatch_tbl, hci_get_dis_tbl, hst_cbk, ll_intf_init, ll_intf_rgstr_hst_cbk,
     ll_intf_rgstr_hst_cbk_ll_queue_full,
 };
 
 /// BLE status code for success
-#[cfg(feature = "wba_ble")]
+#[cfg(feature = "wba-ble")]
 const BLE_STATUS_SUCCESS: tBleStatus = 0;
-#[cfg(feature = "wba_mac")]
+#[cfg(feature = "wba-mac")]
 use crate::bindings::mac::ST_MAC_preInit;
 // /**
 //   ******************************************************************************
@@ -52,10 +52,12 @@ use crate::bindings::mac::ST_MAC_preInit;
  */
 static mut MISSED_HCI_EVENT_FLAG: u8 = 0;
 
+static mut IS_LL_INITIALIZED: u8 = 0;
+
 // static void ll_sys_dependencies_init(void);
 // #if SUPPORT_BLE
 
-#[cfg(feature = "wba_ble")]
+#[cfg(feature = "wba-ble")]
 #[allow(dead_code)]
 unsafe extern "C" fn ll_sys_event_missed_cb(_ptr_evnt_hdr: ble_buff_hdr_p) {
     MISSED_HCI_EVENT_FLAG = 1;
@@ -64,7 +66,7 @@ unsafe extern "C" fn ll_sys_event_missed_cb(_ptr_evnt_hdr: ble_buff_hdr_p) {
 // ll_sys_ble_cntrl_init is called by BleStack_Init from the library.
 // We must provide this function as it's expected as a callback.
 
-#[cfg(feature = "wba_ble")]
+#[cfg(feature = "wba-ble")]
 /**
  * @brief  Initialize the Link Layer IP BLE controller
  * @param  host_callback - callback function for HCI events
@@ -103,7 +105,7 @@ pub unsafe extern "C" fn ll_sys_ble_cntrl_init(host_callback: hst_cbk) {
 // NOTE: init_ble_link_layer and init_ble_link_layer_minimal have been removed.
 // Use init_ble_stack() instead, which uses BleStack_Init for proper initialization.
 
-#[cfg(feature = "wba_ble")]
+#[cfg(feature = "wba-ble")]
 /// Complete the BLE link layer initialization
 /// This should be called after the sequencer is running
 pub fn complete_ble_link_layer_init() {
@@ -123,7 +125,7 @@ pub fn complete_ble_link_layer_init() {
 // ========================================================================
 
 /// BLE stack configuration parameters
-#[cfg(feature = "wba_ble")]
+#[cfg(feature = "wba-ble")]
 pub mod ble_config {
     /// Maximum number of simultaneous BLE connections
     pub const CFG_BLE_NUM_LINK: u8 = 2;
@@ -226,7 +228,7 @@ pub mod ble_config {
 }
 
 /// Static buffers for BLE stack
-#[cfg(feature = "wba_ble")]
+#[cfg(feature = "wba-ble")]
 mod ble_buffers {
     use super::ble_config;
 
@@ -248,7 +250,7 @@ mod ble_buffers {
         NvmCacheBuffer([0u64; (ble_config::CFG_BLE_NVM_SIZE_MAX as usize + 7) / 8]);
 }
 
-#[cfg(feature = "wba_ble")]
+#[cfg(feature = "wba-ble")]
 /// Initialize the BLE stack using the high-level BleStack_Init API
 ///
 /// This is the recommended initialization method as it properly sets up
@@ -324,9 +326,8 @@ pub fn init_ble_stack() -> Result<(), u8> {
         #[cfg(feature = "defmt")]
         defmt::trace!("init_ble_stack: BleStack_Init succeeded");
 
-        // 4. Call ll_sys_dependencies_init after BleStack_Init
-        // This is required for deep sleep, background tasks, etc.
-        ll_sys_dependencies_init();
+        // Note: ll_sys_dependencies_init() is already called by ll_sys_ble_cntrl_init()
+        // which is invoked internally by BleStack_Init(). No need to call it again here.
 
         #[cfg(feature = "defmt")]
         defmt::info!("init_ble_stack: BLE stack initialized successfully");
@@ -337,7 +338,7 @@ pub fn init_ble_stack() -> Result<(), u8> {
 // #endif /* SUPPORT_BLE */
 // #if defined(MAC)
 // #ifndef OPENTHREAD_CONFIG_FILE
-#[cfg(feature = "wba_mac")]
+#[cfg(feature = "wba-mac")]
 /**
  * @brief  Initialize the Link Layer IP 802.15.4 MAC controller
  * @param  None
@@ -368,7 +369,6 @@ unsafe extern "C" fn ll_sys_thread_init() {
  * @retval None
  */
 unsafe fn ll_sys_dependencies_init() {
-    static mut IS_LL_INITIALIZED: u8 = 0;
     let dp_slp_status: ll_sys_status_t;
 
     #[cfg(feature = "defmt")]
@@ -406,4 +406,20 @@ unsafe fn ll_sys_dependencies_init() {
     ll_sys_config_params();
     #[cfg(feature = "defmt")]
     defmt::trace!("ll_sys_dependencies_init: ll_sys_config_params done");
+}
+
+/// Reset all BLE host stack state so that `init_ble_stack()` can safely run again.
+///
+/// Zeros the static memory buffers passed to `BleStack_Init()` and resets
+/// `IS_LL_INITIALIZED` so `ll_sys_dependencies_init()` re-registers the link
+/// layer background task on the next call. Must only be called after the BLE
+/// controller has been reset via `HCI_Reset`.
+#[cfg(feature = "wba-ble")]
+pub(crate) fn reset_ble_stack() {
+    unsafe {
+        IS_LL_INITIALIZED = 0;
+        ble_buffers::DYN_ALLOC_BUFFER.0.fill(0);
+        ble_buffers::GATT_BUFFER.0.fill(0);
+        ble_buffers::NVM_CACHE_BUFFER.0.fill(0);
+    }
 }

@@ -19,23 +19,32 @@ use core::cell::RefCell;
 
 use defmt::*;
 use embassy_executor::Spawner;
-use embassy_stm32::peripherals::RNG;
+use embassy_stm32::aes::{self, Aes};
+use embassy_stm32::mode::Blocking;
+use embassy_stm32::peripherals::{AES as AesPeriph, PKA as PkaPeriph, RNG};
+use embassy_stm32::pka::{self, Pka};
 use embassy_stm32::rcc::{
-    AHB5Prescaler, AHBPrescaler, APBPrescaler, Hse, HsePrescaler, PllDiv, PllMul, PllPreDiv, PllSource, Sysclk,
-    VoltageScale, mux,
+    AHB5Prescaler, AHBPrescaler, APBPrescaler, Hse, HsePrescaler, LsConfig, LseConfig, LseDrive, LseMode, PllDiv,
+    PllMul, PllPreDiv, PllSource, RtcClockSource, Sysclk, VoltageScale, mux,
 };
 use embassy_stm32::rng::{self, Rng};
+use embassy_stm32::time::Hertz;
 use embassy_stm32::{Config, bind_interrupts};
-use embassy_stm32_wpan::gap::{ParsedAdvData, ScanParams, ScanType};
-use embassy_stm32_wpan::hci::event::EventParams;
-use embassy_stm32_wpan::{Ble, ble_runner};
+use embassy_stm32_wpan::bluetooth::HCI;
+use embassy_stm32_wpan::bluetooth::gap::{ParsedAdvData, ScanParams, ScanType};
+use embassy_stm32_wpan::{HighInterruptHandler, LowInterruptHandler, ble_runner, new_controller_state};
 use embassy_sync::blocking_mutex::Mutex;
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use static_cell::StaticCell;
+use stm32wb_hci::Event;
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs {
     RNG => rng::InterruptHandler<embassy_stm32::peripherals::RNG>;
+    AES => aes::InterruptHandler<AesPeriph>;
+    PKA => pka::InterruptHandler<PkaPeriph>;
+    RADIO => HighInterruptHandler;
+    HASH => LowInterruptHandler;
 });
 
 /// BLE runner task - drives the BLE stack sequencer
@@ -48,44 +57,76 @@ async fn ble_runner_task() {
 async fn main(spawner: Spawner) {
     let mut config = Config::default();
 
+    // Enable HSE (32 MHz external crystal) - REQUIRED for BLE radio
     config.rcc.hse = Some(Hse {
-        prescaler: HsePrescaler::DIV2,
+        prescaler: HsePrescaler::Div1,
     });
+
+    // Enable LSE (32.768 kHz external crystal) - REQUIRED for BLE radio sleep timer
+    config.rcc.ls = LsConfig {
+        rtc: RtcClockSource::Lse,
+        lsi: false,
+        lse: Some(LseConfig {
+            frequency: Hertz(32_768),
+            mode: LseMode::Oscillator(LseDrive::MediumLow),
+            peripherals_clocked: true,
+        }),
+    };
 
     // Configure PLL1 (required on WBA)
     config.rcc.pll1 = Some(embassy_stm32::rcc::Pll {
-        source: PllSource::HSE,
-        prediv: PllPreDiv::DIV1,
-        mul: PllMul::MUL30,
-        divr: Some(PllDiv::DIV5),
+        source: PllSource::Hsi,
+        prediv: PllPreDiv::Div1,
+        mul: PllMul::Mul30,
+        divr: Some(PllDiv::Div5),
         divq: None,
-        divp: Some(PllDiv::DIV30),
+        divp: Some(PllDiv::Div30),
         frac: Some(0),
     });
 
-    config.rcc.ahb_pre = AHBPrescaler::DIV1;
-    config.rcc.apb1_pre = APBPrescaler::DIV1;
-    config.rcc.apb2_pre = APBPrescaler::DIV1;
-    config.rcc.apb7_pre = APBPrescaler::DIV1;
-    config.rcc.ahb5_pre = AHB5Prescaler::DIV4;
-    config.rcc.voltage_scale = VoltageScale::RANGE1;
-    config.rcc.sys = Sysclk::PLL1_R;
-    config.rcc.mux.rngsel = mux::Rngsel::HSI;
+    config.rcc.ahb_pre = AHBPrescaler::Div1;
+    config.rcc.apb1_pre = APBPrescaler::Div1;
+    config.rcc.apb2_pre = APBPrescaler::Div1;
+    config.rcc.apb7_pre = APBPrescaler::Div1;
+    config.rcc.ahb5_pre = AHB5Prescaler::Div4;
+    config.rcc.voltage_scale = VoltageScale::Range1;
+    config.rcc.sys = Sysclk::Pll1R;
+    config.rcc.mux.rngsel = mux::Rngsel::Hsi;
 
     let p = embassy_stm32::init(config);
+
+    // Configure radio sleep timer to use LSE
+    {
+        use embassy_stm32::pac::RCC;
+        use embassy_stm32::pac::rcc::vals::Radiostsel;
+        RCC.bdcr().modify(|w| w.set_radiostsel(Radiostsel::Lse));
+    }
+
     info!("Embassy STM32WBA BLE Scanner Example");
 
-    // Initialize RNG (required by BLE stack)
-    static RNG: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<Rng<'static, RNG>>>> = StaticCell::new();
-    let rng = RNG.init(Mutex::new(RefCell::new(Rng::new(p.RNG, Irqs))));
+    // Initialize hardware peripherals required by BLE stack
+    static RNG_INST: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<Rng<'static, RNG>>>> = StaticCell::new();
+    let rng = RNG_INST.init(Mutex::new(RefCell::new(Rng::new(p.RNG, Irqs))));
 
-    // Initialize BLE stack
-    let mut ble = Ble::new(rng);
-    ble.init().expect("BLE initialization failed");
-    info!("BLE stack initialized");
+    static AES_INST: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<Aes<'static, AesPeriph, Blocking>>>> =
+        StaticCell::new();
+    let aes = AES_INST.init(Mutex::new(RefCell::new(Aes::new_blocking(p.AES, Irqs))));
+
+    static PKA_INST: StaticCell<Mutex<CriticalSectionRawMutex, RefCell<Pka<'static, PkaPeriph>>>> = StaticCell::new();
+    let pka = PKA_INST.init(Mutex::new(RefCell::new(Pka::new_blocking(p.PKA, Irqs))));
+
+    info!("Hardware peripherals initialized (RNG, AES, PKA)");
 
     // Spawn the BLE runner task (required for proper BLE operation)
-    spawner.spawn(ble_runner_task().expect("Failed to create BLE runner task"));
+    spawner.spawn(ble_runner_task().expect("Failed to spawn BLE runner"));
+
+    // Initialize BLE stack
+
+    let mut ble = HCI::new(new_controller_state!(8), rng, aes, pka, Irqs)
+        .await
+        .expect("BLE initialization failed");
+
+    info!("BLE stack initialized");
 
     // Configure scan parameters
     // Using active scanning to get scan response data (device names)
@@ -110,7 +151,7 @@ async fn main(spawner: Spawner) {
         let event = ble.read_event().await;
 
         // Check for advertising reports
-        if let EventParams::LeAdvertisingReport { reports } = &event.params {
+        if let Event::LeAdvertisingReport(reports) = &event {
             for report in reports.iter() {
                 device_count += 1;
 
@@ -120,22 +161,13 @@ async fn main(spawner: Spawner) {
                 info!("--- Device #{} ---", device_count);
 
                 // Display device address
-                info!(
-                    "  Address: {:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X} ({})",
-                    report.address.0[5],
-                    report.address.0[4],
-                    report.address.0[3],
-                    report.address.0[2],
-                    report.address.0[1],
-                    report.address.0[0],
-                    address_type_str(report.address_type)
-                );
+                info!("  Address: {}", report.address);
 
                 // Display RSSI
                 info!("  RSSI: {} dBm", report.rssi);
 
                 // Display event type
-                info!("  Type: {}", adv_event_type_str(report.event_type));
+                info!("  Type: {}", report.event_type);
 
                 // Display parsed name if available
                 if let Some(name) = parsed.name {
@@ -197,28 +229,6 @@ async fn main(spawner: Spawner) {
                 info!("");
             }
         }
-    }
-}
-
-/// Convert address type to string
-fn address_type_str(addr_type: embassy_stm32_wpan::hci::types::AddressType) -> &'static str {
-    match addr_type {
-        embassy_stm32_wpan::hci::types::AddressType::Public => "Public",
-        embassy_stm32_wpan::hci::types::AddressType::Random => "Random",
-        embassy_stm32_wpan::hci::types::AddressType::PublicIdentity => "Public Identity",
-        embassy_stm32_wpan::hci::types::AddressType::RandomIdentity => "Random Identity",
-    }
-}
-
-/// Convert advertising event type to string
-fn adv_event_type_str(event_type: u8) -> &'static str {
-    match event_type {
-        0x00 => "Connectable Undirected",
-        0x01 => "Connectable Directed",
-        0x02 => "Scannable Undirected",
-        0x03 => "Non-Connectable Undirected",
-        0x04 => "Scan Response",
-        _ => "Unknown",
     }
 }
 
