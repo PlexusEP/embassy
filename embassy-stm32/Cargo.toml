@@ -206,10 +206,10 @@ block-device-driver = { version = "0.2" }
 aligned = "0.4.3"
 heapless = "0.9.1"
 
-stm32-metapac = { git = "https://github.com/PlexusEP/stm32-data-generated", tag = "stm32-data-6898035b1cf11b2ef28dfc8e6f75bce027829bb4" }
+stm32-metapac = { git = "https://github.com/PlexusEP/stm32-data-generated", tag = "stm32-data-6c342f219fe57ed836b26830502975d058a6e304" }
 
 [build-dependencies]
-stm32-metapac = { git = "https://github.com/PlexusEP/stm32-data-generated", tag = "stm32-data-6898035b1cf11b2ef28dfc8e6f75bce027829bb4", default-features = false, features = ["metadata"] }
+stm32-metapac = { git = "https://github.com/PlexusEP/stm32-data-generated", tag = "stm32-data-6c342f219fe57ed836b26830502975d058a6e304", default-features = false, features = ["metadata"] }
 
 proc-macro2 = "1.0.36"
 quote = "1.0.15"
