@@ -21,7 +21,6 @@
   "rust-analyzer.cargo.features": [
     // Comment out these features when working on the examples. Most example crates do not have any cargo features.
     "stm32f107rb",
-    //"stm32h753zi",
     "time-driver-any",
     "unstable-pac",
     "exti",
