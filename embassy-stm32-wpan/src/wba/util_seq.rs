@@ -61,8 +61,14 @@ impl TaskTable {
 
 unsafe impl Sync for TaskTable {}
 
+/// Size of the sequencer stack in bytes (32KB)
+/// This needs to be large enough for the C BLE stack's call depth,
+/// including connection event processing and HCI event parsing
+/// (the Event enum is ~300+ bytes due to heapless::Vec variants).
+const SEQUENCER_CTX_STACK_SIZE: usize = 32 * 1024;
+
 struct Sequencer {
-    context: ContextManager,
+    context: ContextManager<SEQUENCER_CTX_STACK_SIZE>,
     tasks: TaskTable,
     pending_tasks: AtomicU32,
     events: AtomicU32,
@@ -105,6 +111,7 @@ pub fn run(mask: u32) -> bool {
 }
 
 /// Check if there are any pending tasks or events
+#[allow(dead_code)]
 pub fn has_pending_work() -> bool {
     SEQUENCER.has_work()
 }
@@ -252,9 +259,7 @@ impl Sequencer {
 
         // Save and update SuperMask for nested calls
         // Each nested call makes the mask MORE restrictive (following ST's implementation)
-        let super_mask_backup = self.super_mask.load(Ordering::Acquire);
-        let new_super_mask = super_mask_backup & mask;
-        self.super_mask.store(new_super_mask, Ordering::Release);
+        let super_mask_backup = self.super_mask.fetch_and(mask, Ordering::AcqRel);
 
         loop {
             loop {

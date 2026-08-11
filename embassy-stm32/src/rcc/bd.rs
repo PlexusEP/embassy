@@ -1,9 +1,9 @@
-#[cfg(not(stm32n6))]
 use core::sync::atomic::{Ordering, compiler_fence};
 
-#[cfg(not(stm32n6))]
 use crate::pac::common::{RW, Reg};
 // For the H7, the Retention features live in the pwr registers
+#[cfg(all(backup_sram, not(stm32h7)))]
+use crate::pac::pwr::vals::Retention;
 #[cfg(all(stm32h7, backup_sram))]
 use crate::pac::pwr::vals::Retention;
 #[cfg(all(backup_sram, not(stm32h7)))]
@@ -28,7 +28,7 @@ pub struct LseConfig {
     pub frequency: Hertz,
     pub mode: LseMode,
     /// If peripherals other than RTC/TAMP or RCC functions need the lse this bit must be set
-    #[cfg(any(rcc_l5, rcc_u5, rcc_u3, rcc_wle, rcc_wl5, rcc_wba))]
+    #[cfg(any(rcc_l5, rcc_u5, rcc_u3, rcc_wle, rcc_wl5, rcc_wba, rcc_u0))]
     pub peripherals_clocked: bool,
 }
 
@@ -59,7 +59,7 @@ impl From<LseDrive> for crate::pac::rcc::vals::Lsedrv {
     }
 }
 
-#[cfg(not(any(rtc_v2_l0, rtc_v2_l1, stm32c0, stm32n6)))]
+#[cfg(not(any(rtc_v2_l0, rtc_v2_l1, stm32c0)))]
 type Bdcr = crate::pac::rcc::regs::Bdcr;
 #[cfg(any(rtc_v2_l0, rtc_v2_l1))]
 type Bdcr = crate::pac::rcc::regs::Csr;
@@ -69,7 +69,7 @@ type Bdcr = crate::pac::rcc::regs::Csr1;
 #[cfg(any(stm32c0))]
 fn unlock() {}
 
-#[cfg(not(any(stm32c0, stm32n6)))]
+#[cfg(not(any(stm32c0)))]
 fn unlock() {
     #[cfg(any(stm32f0, stm32f1, stm32f2, stm32f3, stm32l0, stm32l1))]
     let cr = crate::pac::PWR.cr();
@@ -84,7 +84,6 @@ fn unlock() {
     while !cr.read().dbp() {}
 }
 
-#[cfg(not(stm32n6))]
 fn bdcr() -> Reg<Bdcr, RW> {
     #[cfg(any(rtc_v2_l0, rtc_v2_l1))]
     return crate::pac::RCC.csr();
@@ -121,7 +120,7 @@ impl LsConfig {
             lse: Some(LseConfig {
                 frequency: Hertz(32_768),
                 mode: LseMode::Oscillator(LseDrive::MediumHigh),
-                #[cfg(any(rcc_l5, rcc_u5, rcc_u3, rcc_wle, rcc_wl5, rcc_wba))]
+                #[cfg(any(rcc_l5, rcc_u5, rcc_u3, rcc_wle, rcc_wl5, rcc_wba, rcc_u0))]
                 peripherals_clocked: false,
             }),
             lsi: false,
@@ -158,7 +157,6 @@ impl Default for LsConfig {
 }
 
 impl LsConfig {
-    #[cfg(not(stm32n6))]
     pub(crate) fn init(&self) -> Option<Hertz> {
         let rtc_clk = match self.rtc {
             RtcClockSource::Lsi => {
@@ -177,14 +175,12 @@ impl LsConfig {
             },
             None => (false, false, None),
         };
-        #[cfg(any(rcc_l5, rcc_u5, rcc_wle, rcc_wl5, rcc_wba))]
+        #[cfg(any(rcc_l5, rcc_u5, rcc_wle, rcc_wl5, rcc_wba, rcc_u0))]
         let lse_sysen = if let Some(lse) = self.lse {
             Some(lse.peripherals_clocked)
         } else {
             None
         };
-        #[cfg(rcc_u0)]
-        let lse_sysen = Some(lse_en);
 
         _ = lse_drv; // not all chips have it.
 
@@ -292,7 +288,7 @@ impl LsConfig {
         }
         #[cfg(rcc_n6)]
         {
-            ok &= apb4lenr.rtcen() == (self.rtc != RtcClockSource::DISABLE);
+            ok &= apb4lenr.rtcen() == (self.rtc != RtcClockSource::Disable);
         }
         ok &= reg.lseon() == lse_en;
         #[cfg(not(rcc_n6))]

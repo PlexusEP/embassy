@@ -13,8 +13,6 @@
 #[cfg(feature = "mcxa2xx")]
 #[path = "."]
 mod mcxa2xx_exclusive {
-    pub mod flash; // TODO: Add dummy driver to metadata
-
     pub use crate::chips::mcxa2xx::init;
 }
 
@@ -24,6 +22,8 @@ mod mcxa2xx_exclusive {
 mod mcxa5xx_exclusive {
     pub use crate::chips::mcxa5xx::init;
 }
+
+pub mod trace;
 
 #[cfg(mcxa_adc)]
 pub mod adc;
@@ -42,6 +42,11 @@ pub mod ctimer;
 pub mod dma;
 #[cfg(feature = "executor-platform")]
 pub mod executor;
+pub mod flash; // TODO: Add dummy driver to metadata
+#[cfg(mcxa_can)]
+pub mod flexcan;
+#[cfg(mcxa_flexspi)]
+pub mod flexspi;
 #[cfg(mcxa_gpio)]
 pub mod gpio;
 #[cfg(mcxa_lpi2c)]
@@ -63,6 +68,8 @@ pub mod rtc;
 #[cfg(mcxa_rtc2xx)]
 #[path = "rtc/mcxa2xx.rs"]
 pub mod rtc;
+#[cfg(mcxa_sgi)]
+pub mod sgi;
 #[cfg(mcxa_lpspi)]
 pub mod spi;
 #[cfg(mcxa_trng)]
@@ -130,12 +137,16 @@ macro_rules! bind_interrupts {
             #[unsafe(no_mangle)]
             $(#[cfg($cond_irq)])?
             unsafe extern "C" fn $irq() {
+                use embassy_mcxa::interrupt::typelevel::Interrupt;
+
+                $crate::trace::irq_start($crate::interrupt::typelevel::$irq::IRQ);
                 unsafe {
                     $(
                         $(#[cfg($cond_handler)])?
                         <$handler as $crate::interrupt::typelevel::Handler<$crate::interrupt::typelevel::$irq>>::on_interrupt();
                     )*
                 }
+                $crate::trace::irq_end($crate::interrupt::typelevel::$irq::IRQ);
             }
 
             $(#[cfg($cond_irq)])?
