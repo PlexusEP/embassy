@@ -1898,7 +1898,7 @@ impl<'d, M: Mode> I2c<'d, M, MultiMaster> {
     }
 
     /// Determine the received slave command.
-    fn slave_command(&self) -> Result<SlaveCommand, Error> {
+    pub fn slave_command(&self) -> Result<SlaveCommand, Error> {
         let isr = self.info.regs.isr().read();
 
         match isr.dir() {
