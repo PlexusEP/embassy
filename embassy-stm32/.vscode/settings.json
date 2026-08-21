@@ -1,0 +1,5 @@
+{
+    "rust-analyzer.cargo.features": [
+        "stm32g491re" 
+    ]
+}
