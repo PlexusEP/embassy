@@ -1621,6 +1621,11 @@ impl<'d, M: Mode> I2c<'d, M, MultiMaster> {
         }
     }
 
+    pub fn read_address(&mut self) -> u16 {
+        let oar1 = self.info.regs.oar1().read();
+        oar1.oa1()
+    }
+
     fn configure_oa1(&mut self, oa1: Address) {
         match oa1 {
             Address::SevenBit(addr) => self.info.regs.oar1().write(|reg| {
