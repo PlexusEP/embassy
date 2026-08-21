@@ -1906,6 +1906,20 @@ impl<'d, M: Mode> I2c<'d, M, MultiMaster> {
         });
     }
 
+    pub fn enable_interrupt(&self) {
+        self.info.regs.cr1().modify(|reg| {
+            reg.set_pe(false);
+        });
+        self.info.regs.cr1().set_bits(|reg| {
+            reg.set_addrie(true);
+            reg.set_rxie(true);
+            reg.set_stopie(true);
+            reg.set_wupen(true);
+            reg.set_pe(true);
+            trace!("Enable ADDRIE");
+        });
+    }
+
     /// Determine the received slave command.
     pub fn slave_command(&self) -> Result<SlaveCommand, Error> {
         let isr = self.info.regs.isr().read();
