@@ -1912,8 +1912,6 @@ impl<'d, M: Mode> I2c<'d, M, MultiMaster> {
         });
         self.info.regs.cr1().set_bits(|reg| {
             reg.set_addrie(true);
-            reg.set_rxie(true);
-            reg.set_stopie(true);
             reg.set_wupen(true);
             reg.set_pe(true);
             trace!("Enable ADDRIE");
