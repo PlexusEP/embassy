@@ -386,6 +386,10 @@ impl<'d, M: Mode, IM: MasterMode> I2c<'d, M, IM> {
                 self.info.regs.icr().modify(|reg| reg.set_stopcf(true));
                 return Ok(());
             }
+            if isr.addr() {
+                trace!("New START received, ending wait");
+                return Ok(());
+            }
             timeout.check()?;
         }
     }
